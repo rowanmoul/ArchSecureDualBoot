@@ -1,5 +1,5 @@
 # Dual Booting Arch Linux and Windows 10 with Secure Boot and Encrypted Disks
-So you want to dual boot Arch Linux and Windows 10, both with disk encryption. On Windows you have bitlocker turned on, but then you disable secure boot to install Arch and now bitlocker is demanding that you either turn secure boot back on, or enter your recovery key each and every time you boot windows. Not ideal. This guide will help you take control of secure boot on your computer so that you can sign your Linux kernel and run it with secure boot turned on, as well as show you how to set up "bitlocker-like" disk encryption for your Linux partition. It is not for beginners, and expects a certain knowledge level of Linux, or at least an ability to look things up and learn as you go, just as with many other aspects of running Arch Linux as opposed to Ubuntu or similar "user friendly" distributions. While this guide attempts to include as many details as possible, it is far from exhaustive, and it is up to the reader to fill in the gaps.
+So you want to dual boot Arch Linux and Windows 10, both with disk encryption. On Windows you have bitlocker turned on which encrpyts your disk without requiring a password on every boot. Then you disable secure boot to install Arch and now bitlocker is demanding that you either turn secure boot back on, or enter your recovery key each and every time you boot windows. Not ideal. This guide will help you take control of secure boot on your computer so that you can sign your Linux kernel and run it with secure boot turned on, as well as show you how to set up "bitlocker-like" disk encryption for your Linux partition (so you don't have to enter a password every time for linux either). It is not for beginners, and expects a certain knowledge level of Linux, or at least an ability to look things up and learn as you go, just as with many other aspects of running Arch Linux as opposed to Ubuntu or similar "user friendly" distributions. While this guide attempts to include as many details as possible, it is far from exhaustive, and it is up to the reader to fill in the gaps.
 
 ## Before You Begin
 You want to disable Windows Bitlocker before proceeding, as we will be making changes that will result in the TPM not releasing the keys needed to decrypt the disk automatically. Read on to understand what this means (indeed, it is strongly suggested that you read the entire guide and suggested reference material before you begin so you can do further research to answer any questions you might have).  
@@ -7,148 +7,36 @@ For disk encryption on Linux, it is easier to setup before installing Linux, as 
 Also, be sure to install the `rng-tools` package (this is not included on an Arch live disk by default) and start `rngd.service`. This will feed output from any hardware random number generators on your system (such as a TPM) into `/dev/random` and `/dev/urandom`, which are used to help with cryptogrphic key generation. Getting into why this matters is well beyond the scope of this guide, but suffice it to say, this will help ensure your system has enough entropy to generate strong cryptographic keys that cannot be reproduced easily.  
 The actual procedure described here should take about an hour if you already know what you are doing (because you read the guide through first).
 
-## Configuring Secure Boot
-The first step is to take control of secure boot on your machine by replacing the secure boot certificates with your own, while retaining the default keys so you can still secure boot windows and get firmware updates.  
-It is recommended to read at least the first portion of #1 in the secure boot resources section before proceeding to get a background on how secure boot works.
-Another excellent resource is #2. Both are guides similar to this one. Feel free to use them instead of this one if they work for you. In particular, this guide only describes one pathway to configure secure boot (though it is the pathway that will hopefully work in the most cases). If it doesn't work for your hardware/firmware, the linked guides have other methods that may work.  
-This section can be completed either using an Arch Linux live disk, or an already installed Arch Linux system. The reader is responsible for installing any needed packages, and for ensuring the security of their private keys (to be generated below).
+## How Bitlocker securely encrypts your drive without requiring a password at every boot.
+Bitlocker works by storing your disk's encryption key in a hardware device called a Trusted Platform Module, or TPM. 
 
-### Generating New Secure Boot Keys
-To generate a new Platofrm Key (PK), Key Exchange Key (KEK), and Database Key (db), you can use `openssl`. The examples in this guide will be using `openssl 1.1.1`, which is the latest Long Term Support release at the time of writing.  
+### What is a TPM?
+For a good overview of what a TPM is and what it can do, go read [this](https://en.wikipedia.org/wiki/Trusted_Platform_Module) and the first chapter of [this book](https://link.springer.com/book/10.1007%2F978-1-4302-6584-9) (or all of it really). That free book is arguably the single most useful resource for understanding the otherwise poorly docmented TPM.  
+The TPM can do a lot of things, but in the case of bitlocker (as well as what we are about to do in linux) it is used to cryptographically secure our disk encryption key in such a way that it can only be retrieved if the machine boots with the software we expect ([Platform Integrity](https://en.wikipedia.org/wiki/Trusted_Platform_Module#Platform_integrity)). This means that if someone where to try to boot from a live disk, or replace your bootloader or kernel ([evil maid attack](https://en.wikipedia.org/wiki/Evil_maid_attack)), the TPM will not release the disk encryption key.  
+But wait, I read that Wikipedia page! It said there were ways extract secrets from TPMs! Yes, it's not a flawless system, but if you read further about it, the only people with the resources to carry out such attacks probably already have your data, if they even want it. Joe Smith who picks up your lost laptop bag on the train and takes it home won't be able to. Consider what your realistic [threat model](https://en.wikipedia.org/wiki/Threat_model) is, and if this is something you need to be concerned with, this guide isn't what you need. Instead, you may want to get yourself a giant magnet to repel any [$5 wrenches](https://xkcd.com/538/) that might be swung in your direction.
 
-The following command will produce an RSA 2048 private key, and a matching public key certificate. You are welcome to try RSA 4096 for added security but not all UEFI firmware implementations support this, so your mileage may vary, and it might not be immediately obvious that it didn't work. (It appears that firmware for Lenovo Thinkpads going back at least to 2016 support RSA 4096).
-```
-# openssl req -new -x509 -newkey rsa:2048 -keyout PK.key -out PK.crt -days 3650 -nodes
-```
-`-new` tells openssl to create a new certificate request  
-`-x509` tells openssl to actually create a certificate rather than just a request for one  
-`-newkey rsa:2048` tells openssl to generate a new private key using RSA 2048  
-`-keyout` and `-out` specify output files for the private key and certificate respectively  
-`-days 3650` specifies how long the certificate should be valid for. Since we are putting this certificate in our computer firmware, we want it to last a while. Will you still have this computer in 10 years?  
-`-nodes` this tells openssl to not encrpyt the private key. If you want to encrpyt it with a password, remove this option.  
+### TPM Deep Dive
+This section, despite it's name, will really only scratch the surface, but it should give enough of an overview of how the TPM works that you will understand it's usage in this guide. Again, the free ebook linked above and at the end of this guide contains a wealth of information if you want to do a true deep dive like did in order to write this guide. You won't find a better resource.
 
-When you run this command you will be prompted to enter some details about yourself as the issuer of the certificate. You can put as little or as much as you want here, but I would suggest at least setting the common name and/or organizaton. These can also be set from the above command with, for example, `-subj /CN=your common name/O=your org name/` if you do not want to do it interactively  
-Unfortunately I can't find a good list of all values that can go in here. They are listed in [RFC 5280 section 4.1.2.4](https://tools.ietf.org/html/rfc5280#section-4.1.2.4), but the short names are not included there. You can find some of them on [this SO post](https://stackoverflow.com/questions/6464129/certificate-subject-x-509).  
-As an example, this is the subject/issuer you'll find in the default PK on a lenovo thinkpad from 2016: `/C=JP/ST=Kanagawa/L=Yokohama/O=Lenovo Ltd./CN=Lenovo Ltd. PK CA 2012`
-
-#### Generate the keys
-Run the above command three times, generating a PK, KEK, and db key.
-I did it like this:
-```
-# openssl req -new -x509 -newkey rsa:2048 -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd PK/" -keyout PK.key -out PK.crt -days 3650 -nodes
-
-# openssl req -new -x509 -newkey rsa:2048 -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd KEK/" -keyout KEK.key -out KEK.crt -days 3650 -nodes
-
-# openssl req -new -x509 -newkey rsa:2048 -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd db/" -keyout db.key -out db.crt -days 3650 -nodes
-```
-
-### Converting the certificates to EFI signature list format
-The certificates generated are not in the format needed by the tools we will use to install them in the frimware. To fix this we will use some utilities from the `efitools` package. The version we are using here is 1.9.2.  
-We want to convert our certificates to EFI Signature List (`.esl`) format. To do this, the following command is used:
-```
-# cert-to-efi-sig-list -g <your guid> PK.crt PK.esl
-```
-`-g` is used to provide a GUID to identify the owner of the certificate (you). If this is not provided, an all zero GUID will be used.  
-`PK.crt` is the input certificate  
-`PK.esl` is the output esl file.
-
-#### Generate a GUID
-In order to provide our own GUID for the certificate owner, we have to generate one. There is a multitude of ways to do this, but in this case a one line python script will do the trick:
-```
-# GUID=`python -c 'import uuid; print(str(uuid.uuid1()))'`
-# echo $GUID > GUID.txt
-```
-The first line generates the GUID and assigns it to a shell variable called GUID, the second line echos the value into a text file so we can keep it beyond the current shell session.
-
-#### Convert the certificates
-Run the above command to convert each of the three certificates, also adding the GUID we just generated:
-```
-# cert-to-efi-sig-list -g $GUID PK.crt PK.esl
-# cert-to-efi-sig-list -g $GUID KEK.crt KEK.esl
-# cert-to-efi-sig-list -g $GUID db.crt db.esl
-```
-
-### Preserving the default KEK and db, and dbx entries
-Since we want to be able to dual boot Windows 10, it is important that we preserve the default KEK, db, and dbx entries from Microsoft and the computer manufacturer. Maintaining Microsoft's keys will ensure that Windows can still boot, and maintaining the manufacturer keys will ensure we can still install things like EFI/BIOS updates, which are often distributed as EFI binaries signed by the manufactuer's key, that run on reboot to update the firmware. It is especially important that we preserve the dbx entries if we are keeping the Microsoft keys, as the dbx contains a black list of signed efi binaries (mostly all signed by Microsoft) that are not allowed to run, despite being signed by an certificate in the db (one of the Microsoft keys). "But I only need the db and dbx keys for this" you might be thinking. True, but if we do not keep the KEKs too, you cannot benefit from updates to the db and dbx issued by Microsoft or your computer manufacturer. Removing the manufacturer's PK does prevent them from issuing new KEKs, but this is much less likely, and if you want to take control of secure boot there is no way around replacing the PK, unless you have access to the private key it was made with.  
-Finally, while most firmware has an option to restore factory default keys, if yours does not, you may want to keep these keys for that usecase too.
-
-To preserve the existing keys, we will use another utility from `efitools` called `efi-readvar`. This utility runs in Linux user-space and can read efi secure variables such as the secure boot variables:
-```
-# efi-readvar -v PK -o original_PK.esl
-```
-`-v` specifies the efi variable to read
-`-o` file to output the contents to (notice this is also in `.esl` format.)
-
-#### Copy Original Keys
-Run the above command for each of PK, KEK, db, and dbx
-```
-# efi-readvar -v PK -o original_PK.esl
-# efi-readvar -v KEK -o original_KEK.esl
-# efi-readvar -v db -o original_db.esl
-# efi-readvar -v dbx -o original_dbx.esl
-```
-
-#### Append original keys to new keys
-With the `.esl` file format, we can easily merge our new keys with the existing ones by simply concatenating the files:
-```
-# cat KEK.esl original_KEK.esl > all_KEK.esl
-# cat db.esl original_db.esl > all_db.esl
-```
-
-### Signing the EFI signature list files
-While we don't technically need to do this step, since the firmware will accept any keys in secure boot setup mode (we'll get to that later), it is more correct to use signed update files.  
-If you want to add a KEK or db entry after secure boot is no longer in setup mode, you'll have to sign it with the next highest key so let's do that now as practice. The PK can sign itself, and is considered the root of trust, just like the root certificate from a certificate authority such as entrust or lets encrypt. The following command is used to sign the signature lists:
-```
-# sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl PK.auth
-```
-`-k` specifies the private key for the certificate.  
-`-c` specifies the certificate to sign with.  
-`PK` is the EFI variable the output is intended for.  
-`PK.esl` is the EFI signature list file to sign.  
-`PK.auth` is the name of signed EFI signature list file, with a `.auth` extension indicating that it has an authentication header added.
-
-#### Sign the files
-Run the above command for each `.esl` file:
-```
-# sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl PK.auth
-# sign-efi-sig-list -k PK.key -c PK.crt all_KEK KEK.esl all_KEK.auth
-# sign-efi-sig-list -k KEK.key -c KEK.crt db all_db.esl all_db.auth
-# sign-efi-sig-list -k KEK.key -c KEK.crt dbx dbx.esl dbx.auth
-```
-The PK signs itself, the PK also signs the KEKs, and our KEK (the only one we have the private key for) signs the db and dbx keys. Note that since we don't have anything to add to the dbx, we just sign the original list.  
-Our db key is later used to sign EFI binaries and kernels that we want to boot, the KEK is used if we want to add new db entries, and the PK is used if we want to add new KEK entries.
-
-### Installing the new Secure Boot Keys
-The first step here is to put secure boot into setup mode by removing the current PK. This can be done from the BIOS setup utility, but beyond that, the exact steps differ greatly accross hardware. Typically there will be a security section, and in that, a secure boot section. This is where you would have turned secure boot off in order to install Arch Linux initially or to boot the live disk. Look for an option to put secure boot into setup mode, or an option to delete all secure boot keys. *If you see both, delete all keys*, as this often prevents certain issues with the tool we will be using (we saved all the old keys and will be replacing them anyway). Some firmware may require a firmware password to be set before these options are shown. Setup mode is on when there is no PK. Once a new PK is set, secure boot turns back to user mode, and any updates to any of the secure variables must by signed by the next highest key.  
-Quick note: you may see a reference to `noPK.esl` or similar in the reference guides. This is an empty file signed with the PK that can be used to "update" the PK to nothing (remove the PK) while in user mode, thereby putting secure boot back into setup mode without entering the BIOS setup utility. This works because the PK can be updated in user mode as long as the update is signed by the current PK. Unless you are changing your keys often, you likely won't need this, but now you understand what it is for.
-
-Once secure boot is in setup mode, we can use an `efitools` utility called `efi-updatevar` to replace each of the secure variables:
-```
-# efi-updatevar -f PK.auth PK
-```
-`-f` specifies the file to update the variable with. `PK.auth` is the efi signature list (signed in this example) that will be set on the variable. If you wan to use a .esl file here, you need to also add a `-e` before or after `-f`  
-`PK` is the secure variable we want to update  
-*NOTE:* This command as written will **replace** all the values in the variable. It is possible to instead append with `-a` but this seems to have problems on some firmware, while just replacing everything usually works, and in this case we added the old keys to ours and (ideally) cleared out all the secure variables before starting anyway. The reason it is ideal to clear out all the variables before starting is also because some firmware will not accept a replacement if there is a value present. Clearing all the keys and using the replacement command above appears to work in the most cases.
-
-#### Install new secure boot keys
-Run the above command for dbx, db, KEK, and PK, preferably in that order, but just make sure the PK is last so that we keep setup mode active.  
-```
-# efi-updatevar -f dbx.auth dbx
-# efi-updatevar -f all_db.auth db
-# efi-updatevar -f all_KEK.auth KEK
-# efi-updatevar -f PK.auth PK
-```
-Since we signed our efi signature lists and created auth files we should theoretically be able to update the KEK, db, and dbx even after setting the PK (which takes us out of setup mode), but `efi-updatevar` seems to have trouble doing this. There are other tools that work better for updating with signed esl files (`.auth`) when secure boot is in user mode. For example `KeyTool`, also from `efitools` seems to work fairly well, however it is an efi binary so you have to reboot to use it (like your BIOS setup), which is more cumbersome and less scriptable than `efi-updatevar`.
-
-### Conclusion
-If you successfully completed all of the above sections, you now have your own keys added to secure boot, so you can start signing bootloaders and kernels with your db key!  
-If you want to quickly test your handywork `efitools` supplies a `HelloWorld` efi binary that you can sign and try to boot into. Here's how you would do that, assuming your efi system patition is mounted at `/boot` (you'll have to install a package called `sbsigntools`, which you'll need to sign your kernel later anyway).
-```
-# mv /boot/EFI/Boot/bootx64.efi /boot/EFI/Boot/bootx64-prev.efi
-# sbsign --key db.key --cert db.crt --output /boot/EFI/Boot/bootx64.efi /usr/share/efitools/efi/HelloWorld.efi
-```
-This will rename your current default boot entry to bootx64-prev.efi to you can restore it after the test, and then sign and copy HelloWorld.efi into the default efi boot location so it will automaticlly boot. After running this, reboot, and enter BIOS setup. Enable secure boot and save. When you exit setup it should try to boot the HelloWorld binary we just copied, and becasue we signed it, it should work. If it doesn't, then something went wrong up above.
-
+#### Platform Configuration Registers
+Platform Configuration Registers, or PCRs are the key feature of the TPM that we will be using. They are volatile memory locations within the TPM where the computer's firmware records "measurements" of the software that executes during the boot process (and possibly after boot as well). The values of the PCRs can be used to "seal" an encryption key (or another TPM object) with a policy that only allows the key to be released if the PCRs have the same value as they did when the polcy was created (which it is up to the user to determine is a trusted configuration). This is secure because unlike CPU registers, PCRs cannot be overritten or reset. They can only be "extended". All PCRs are initialized to zero at first power. Measurements are "extended" into the PCR by the firmware by passing the measurement to the TPM, which then "ORs" that data with the existing data in the PCR, takes a cryptograhic hash of the new value (usually sha1 or sha256) and then writes the hash digest to the PCR. "Measurements" are typically another cryptographic hash of the software binary or other data (such as configuration data) that is being measured.  
+A minimum of 24 PCRs are required on a standard PC. 
+Different PCRs contain measurements of different parts of the boot process. The TCG (the creators of the TPM specification) define which values should be extended into each PCR. It took me far too long to find this information as it wasn't in the main spec, but it can be found in the [PC Client Platform Firmware Profile
+Specification](https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/). To save you from reading that document, I have boiled the relevant parts down into the table below:  
+PCR&nbsp;&nbsp;&nbsp;|Description
+---------------------|-----------
+0                    |UEFI BIOS Binary from ROM
+1                    |BIOS Configuration Settings from NVRAM
+2                    |??
+3                    |??
+4                    |Boot Loader (eg. GRUB)
+5                    |Boot Loader config (EFI boot entry path), and Drive Partition Table
+6                    |Platform Specific (your computer manufacturer can use this for whatever they want)
+7                    |Secure Boot Policy
+8-15                 |Designated for use by the Operating System. For the purposes of this guide, note that GRUB extends measurements of it's configuration as well as your kernel image and initramfs into PCR 8
+16                   |Debug PCR. Note that this PCR can be reset manually without rebooting.
+17-22                |Reserved for Future use.
+23                   |??
 
 ## Installing Arch Linux on an Encrypted Disk alongside Windows with Bitlocker
 This guide wasn't initially going to include Arch Installation steps, but it is easiest to set all this up while doing a fresh install. Only steps that are not part of a typical install will be covered in detail. Everything else will be listed in brief only. See the [Official Install Guide](https://wiki.archlinux.org/index.php/Installation_guide) for details. Further, these steps will only install the bare minimum needed to boot Arch and do everything outlined in this guide.
@@ -308,17 +196,35 @@ Just call `passwd` to set it, since you are already the root user.
 
 ### Unlocking LUKS with TPM 2.0
 
-#### But first, some preamble...
-So you finally made it all the way down here, and you're still wondering what a TPM is. Well go read [this](https://en.wikipedia.org/wiki/Trusted_Platform_Module) and the first chapter of [this book](https://link.springer.com/book/10.1007%2F978-1-4302-6584-9) (or all of it really), then come back.  
-The TPM can do a lot of things, but in our case, we want to use it to cryptographically secure our LUKS passphrase in such a way that it can only be retrieved if the machine boots the way we expect ([Platform Integrity](https://en.wikipedia.org/wiki/Trusted_Platform_Module#Platform_integrity)). This means that if someone where to try to boot from a live disk, or replace your bootloader or kernel ([evil maid attack](https://en.wikipedia.org/wiki/Evil_maid_attack)), the TPM will not release the LUKS passphrase.  
-But wait, I read that Wikipedia page! It said there were ways extract secrets from TPMs! Yes, it's not a flawless system, but if you read further about it, the only people with the resources to carry out such attacks probably already have your data, if they even want it. Joe Smith who picks up your lost laptop bag on the train and takes it home won't be able to. Consider what your realistic [threat model](https://en.wikipedia.org/wiki/Threat_model) is, and if this is something you need to be concerned with, this guide isn't what you need. Instead, you may want to get yourself a giant magnet to repel any [$5 wrenches](https://xkcd.com/538/) that might be swung in your direction.
-
 #### Sealing your LUKS passphrase with the TPM
+Create a primary object under the owner heirachy.
+```
+# tpm2_creatprimary --heirachy=o --key-auth=someprivatekey --hash-algorithm=sha256 --key-algorithm=rsa4096:aes256cfb --key-context=somecontextfilepath --attributes=someattributes
+```
+Being explicit - some of these are default
 
-TPM Magic
-What does it mean to take ownership of TPM? Can it be reset?
-Use Vanilla TPM Tools/TSS Stack, or Clevis?
-Sound like LUKS2 will support TPM as some future time, but not yet available (probably a year or two at the rate they are going...)
+Create Wilcard Polcy for Key.
+```
+
+```
+
+Create a key under a the new primary key.
+```
+tpm2_create --parent-context=somecontextfilepath --parent-auth=someprivatekey --hash-algorithm=sha256 --key-algorithm=rsa --attributes=someattributes --sealing-input=alukspassphrase --policy=awildcardpolicyfile --key-context=somekeycontextfilepath
+```
+
+
+Current plan:
+TPM sealed luks passkey is stored in TPM NV with flexible policy that is satisfied by another policy. Other Policy involves as many relevant PCRs as possible while maintaining convenience (might ignore bios settings?).
+When a grub or kernel update is installed, other policy is updated (with auth key stored in encrypted disk) to a new temp policy that includes the secure boot PCR, and possibly the BIOS PCR (just not the ones related to grub, kernel, etc.), and the TPM Boot Counter +1 (only next boot allowed).
+Initramfs script will check for:
+1. Regular sealed key to unlock disk
+2. Temp sealed key to unlock disk
+3. Put up a password prompt (since we need a fallback)
+  - On password fallback, show which PCR's changed, and ask if TPM seal should be updated
+  - Would like to securely store the PCR values so that if we fall back to a password, the PCRs that changed can be shown to the user so they can decide if these changes were expected. Probably will store them as a salted hash value so the exact value of the PCR is not stored, but new salted hash can be generated.
+
+Actual unlocking will be done via the regular `encrypt` hook, with the TPM unlock hook running first and creating a keyfile for the `encrypt` hook to read. Optional Re-seal will be handled by another hook that runs after the `encrypt` hook has unlocked the drive (since it needs the key in the drive to update the TPM policy.)
 
 #### Unsealing your LUKS passphrase with the TPM automatically in initramfs
 
@@ -327,21 +233,164 @@ Initramfs Magic
 #### Updating TPM seal on system update
 Pacman hooks!
 
+## Configuring Secure Boot
+The first step is to take control of secure boot on your machine by replacing the secure boot certificates with your own, while retaining the default keys so you can still secure boot windows and get firmware updates.  
+It is recommended to read at least the first portion of #1 in the secure boot resources section before proceeding to get a background on how secure boot works.
+Another excellent resource is #2. Both are guides similar to this one. Feel free to use them instead of this one if they work for you. In particular, this guide only describes one pathway to configure secure boot (though it is the pathway that will hopefully work in the most cases). If it doesn't work for your hardware/firmware, the linked guides have other methods that may work.  
+This section can be completed either using an Arch Linux live disk, or an already installed Arch Linux system. The reader is responsible for installing any needed packages, and for ensuring the security of their private keys (to be generated below).
+
+### Generating New Secure Boot Keys
+To generate a new Platofrm Key (PK), Key Exchange Key (KEK), and Database Key (db), you can use `openssl`. The examples in this guide will be using `openssl 1.1.1`, which is the latest Long Term Support release at the time of writing. Another option for the especially security consious is to use the TPM to generate the keys with it's hardware random number generator via the `tpm2-tss-engine` package.  
+
+The following command will produce an RSA 2048 private key, and a matching public key certificate. You are welcome to try RSA 4096 for added security but not all UEFI firmware implementations support this, so your mileage may vary, and it might not be immediately obvious that it didn't work. (It appears that firmware for Lenovo Thinkpads going back at least to 2016 support RSA 4096).
+```
+# openssl req -new -x509 -newkey rsa:2048 -keyout PK.key -out PK.crt -days 3650 -nodes
+```
+`-new` tells openssl to create a new certificate request  
+`-x509` tells openssl to actually create a certificate rather than just a request for one  
+`-newkey rsa:2048` tells openssl to generate a new private key using RSA 2048  
+`-keyout` and `-out` specify output files for the private key and certificate respectively  
+`-days 3650` specifies how long the certificate should be valid for. Since we are putting this certificate in our computer firmware, we want it to last a while. Will you still have this computer in 10 years?  
+`-nodes` this tells openssl to not encrpyt the private key. If you want to encrpyt it with a password, remove this option.  
+
+When you run this command you will be prompted to enter some details about yourself as the issuer of the certificate. You can put as little or as much as you want here, but I would suggest at least setting the common name and/or organizaton. These can also be set from the above command with, for example, `-subj /CN=your common name/O=your org name/` if you do not want to do it interactively  
+Unfortunately I can't find a good list of all values that can go in here. They are listed in [RFC 5280 section 4.1.2.4](https://tools.ietf.org/html/rfc5280#section-4.1.2.4), but the short names are not included there. You can find some of them on [this SO post](https://stackoverflow.com/questions/6464129/certificate-subject-x-509).  
+As an example, this is the subject/issuer you'll find in the default PK on a lenovo thinkpad from 2016: `/C=JP/ST=Kanagawa/L=Yokohama/O=Lenovo Ltd./CN=Lenovo Ltd. PK CA 2012`
+
+#### Generate the keys
+Run the above command three times, generating a PK, KEK, and db key.
+I did it like this:
+```
+# openssl req -new -x509 -newkey rsa:2048 -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd PK/" -keyout PK.key -out PK.crt -days 3650 -nodes
+
+# openssl req -new -x509 -newkey rsa:2048 -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd KEK/" -keyout KEK.key -out KEK.crt -days 3650 -nodes
+
+# openssl req -new -x509 -newkey rsa:2048 -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd db/" -keyout db.key -out db.crt -days 3650 -nodes
+```
+
+### Converting the certificates to EFI signature list format
+The certificates generated are not in the format needed by the tools we will use to install them in the frimware. To fix this we will use some utilities from the `efitools` package. The version we are using here is 1.9.2.  
+We want to convert our certificates to EFI Signature List (`.esl`) format. To do this, the following command is used:
+```
+# cert-to-efi-sig-list -g <your guid> PK.crt PK.esl
+```
+`-g` is used to provide a GUID to identify the owner of the certificate (you). If this is not provided, an all zero GUID will be used.  
+`PK.crt` is the input certificate  
+`PK.esl` is the output esl file.
+
+#### Generate a GUID
+In order to provide our own GUID for the certificate owner, we have to generate one. There is a multitude of ways to do this, but in this case a one line python script will do the trick:
+```
+# GUID=`python -c 'import uuid; print(str(uuid.uuid1()))'`
+# echo $GUID > GUID.txt
+```
+The first line generates the GUID and assigns it to a shell variable called GUID, the second line echos the value into a text file so we can keep it beyond the current shell session.
+
+#### Convert the certificates
+Run the above command to convert each of the three certificates, also adding the GUID we just generated:
+```
+# cert-to-efi-sig-list -g $GUID PK.crt PK.esl
+# cert-to-efi-sig-list -g $GUID KEK.crt KEK.esl
+# cert-to-efi-sig-list -g $GUID db.crt db.esl
+```
+
+### Preserving the default KEK and db, and dbx entries
+Since we want to be able to dual boot Windows 10, it is important that we preserve the default KEK, db, and dbx entries from Microsoft and the computer manufacturer. Maintaining Microsoft's keys will ensure that Windows can still boot, and maintaining the manufacturer keys will ensure we can still install things like EFI/BIOS updates, which are often distributed as EFI binaries signed by the manufactuer's key, that run on reboot to update the firmware. It is especially important that we preserve the dbx entries if we are keeping the Microsoft keys, as the dbx contains a black list of signed efi binaries (mostly all signed by Microsoft) that are not allowed to run, despite being signed by an certificate in the db (one of the Microsoft keys). "But I only need the db and dbx keys for this" you might be thinking. True, but if we do not keep the KEKs too, you cannot benefit from updates to the db and dbx issued by Microsoft or your computer manufacturer. Removing the manufacturer's PK does prevent them from issuing new KEKs, but this is much less likely, and if you want to take control of secure boot there is no way around replacing the PK, unless you have access to the private key it was made with.  
+Finally, while most firmware has an option to restore factory default keys, if yours does not, you may want to keep these keys for that usecase too.
+
+To preserve the existing keys, we will use another utility from `efitools` called `efi-readvar`. This utility runs in Linux user-space and can read efi secure variables such as the secure boot variables:
+```
+# efi-readvar -v PK -o original_PK.esl
+```
+`-v` specifies the efi variable to read
+`-o` file to output the contents to (notice this is also in `.esl` format.)
+
+#### Copy Original Keys
+Run the above command for each of PK, KEK, db, and dbx
+```
+# efi-readvar -v PK -o original_PK.esl
+# efi-readvar -v KEK -o original_KEK.esl
+# efi-readvar -v db -o original_db.esl
+# efi-readvar -v dbx -o original_dbx.esl
+```
+
+#### Append original keys to new keys
+With the `.esl` file format, we can easily merge our new keys with the existing ones by simply concatenating the files:
+```
+# cat KEK.esl original_KEK.esl > all_KEK.esl
+# cat db.esl original_db.esl > all_db.esl
+```
+
+### Signing the EFI signature list files
+While we don't technically need to do this step, since the firmware will accept any keys in secure boot setup mode (we'll get to that later), it is more correct to use signed update files.  
+If you want to add a KEK or db entry after secure boot is no longer in setup mode, you'll have to sign it with the next highest key so let's do that now as practice. The PK can sign itself, and is considered the root of trust, just like the root certificate from a certificate authority such as entrust or lets encrypt. The following command is used to sign the signature lists:
+```
+# sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl PK.auth
+```
+`-k` specifies the private key for the certificate.  
+`-c` specifies the certificate to sign with.  
+`PK` is the EFI variable the output is intended for.  
+`PK.esl` is the EFI signature list file to sign.  
+`PK.auth` is the name of signed EFI signature list file, with a `.auth` extension indicating that it has an authentication header added.
+
+#### Sign the files
+Run the above command for each `.esl` file:
+```
+# sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl PK.auth
+# sign-efi-sig-list -k PK.key -c PK.crt all_KEK KEK.esl all_KEK.auth
+# sign-efi-sig-list -k KEK.key -c KEK.crt db all_db.esl all_db.auth
+# sign-efi-sig-list -k KEK.key -c KEK.crt dbx dbx.esl dbx.auth
+```
+The PK signs itself, the PK also signs the KEKs, and our KEK (the only one we have the private key for) signs the db and dbx keys. Note that since we don't have anything to add to the dbx, we just sign the original list.  
+Our db key is later used to sign EFI binaries and kernels that we want to boot, the KEK is used if we want to add new db entries, and the PK is used if we want to add new KEK entries.
+
+### Installing the new Secure Boot Keys
+The first step here is to put secure boot into setup mode by removing the current PK. This can be done from the BIOS setup utility, but beyond that, the exact steps differ greatly accross hardware. Typically there will be a security section, and in that, a secure boot section. This is where you would have turned secure boot off in order to install Arch Linux initially or to boot the live disk. Look for an option to put secure boot into setup mode, or an option to delete all secure boot keys. *If you see both, delete all keys*, as this often prevents certain issues with the tool we will be using (we saved all the old keys and will be replacing them anyway). Some firmware may require a firmware password to be set before these options are shown. Setup mode is on when there is no PK. Once a new PK is set, secure boot turns back to user mode, and any updates to any of the secure variables must by signed by the next highest key.  
+Quick note: you may see a reference to `noPK.esl` or similar in the reference guides. This is an empty file signed with the PK that can be used to "update" the PK to nothing (remove the PK) while in user mode, thereby putting secure boot back into setup mode without entering the BIOS setup utility. This works because the PK can be updated in user mode as long as the update is signed by the current PK. Unless you are changing your keys often, you likely won't need this, but now you understand what it is for.
+
+Once secure boot is in setup mode, we can use an `efitools` utility called `efi-updatevar` to replace each of the secure variables:
+```
+# efi-updatevar -f PK.auth PK
+```
+`-f` specifies the file to update the variable with. `PK.auth` is the efi signature list (signed in this example) that will be set on the variable. If you wan to use a .esl file here, you need to also add a `-e` before or after `-f`  
+`PK` is the secure variable we want to update  
+*NOTE:* This command as written will **replace** all the values in the variable. It is possible to instead append with `-a` but this seems to have problems on some firmware, while just replacing everything usually works, and in this case we added the old keys to ours and (ideally) cleared out all the secure variables before starting anyway. The reason it is ideal to clear out all the variables before starting is also because some firmware will not accept a replacement if there is a value present. Clearing all the keys and using the replacement command above appears to work in the most cases.
+
+#### Install new secure boot keys
+Run the above command for dbx, db, KEK, and PK, preferably in that order, but just make sure the PK is last so that we keep setup mode active.  
+```
+# efi-updatevar -f dbx.auth dbx
+# efi-updatevar -f all_db.auth db
+# efi-updatevar -f all_KEK.auth KEK
+# efi-updatevar -f PK.auth PK
+```
+Since we signed our efi signature lists and created auth files we should theoretically be able to update the KEK, db, and dbx even after setting the PK (which takes us out of setup mode), but `efi-updatevar` seems to have trouble doing this. There are other tools that work better for updating with signed esl files (`.auth`) when secure boot is in user mode. For example `KeyTool`, also from `efitools` seems to work fairly well, however it is an efi binary so you have to reboot to use it (like your BIOS setup), which is more cumbersome and less scriptable than `efi-updatevar`.
+
+### Conclusion
+If you successfully completed all of the above sections, you now have your own keys added to secure boot, so you can start signing bootloaders and kernels with your db key!  
+If you want to quickly test your handywork `efitools` supplies a `HelloWorld` efi binary that you can sign and try to boot into. Here's how you would do that, assuming your efi system patition is mounted at `/boot` (you'll have to install a package called `sbsigntools`, which you'll need to sign your kernel later anyway).
+```
+# mv /boot/EFI/Boot/bootx64.efi /boot/EFI/Boot/bootx64-prev.efi
+# sbsign --key db.key --cert db.crt --output /boot/EFI/Boot/bootx64.efi /usr/share/efitools/efi/HelloWorld.efi
+```
+This will rename your current default boot entry to bootx64-prev.efi to you can restore it after the test, and then sign and copy HelloWorld.efi into the default efi boot location so it will automaticlly boot. After running this, reboot, and enter BIOS setup. Enable secure boot and save. When you exit setup it should try to boot the HelloWorld binary we just copied, and becasue we signed it, it should work. If it doesn't, then something went wrong up above.
+
 ## Signing your bootloader and kernel automatically on update
 More Pacman hooks!
 
 ## Dual Booting with Windows without breaking Bitlocker on every bootloader update
-Here we're going to do a little initramfs magic to add a boot entry for Windows in grub that doesn't involve chainloading, which would break tpm based bitlocker every time grub was updated.  
-Basically we are going to create an initramfs that sets the EFI BootNext variable and then reboots.
+Here we're going to do a little initramfs magic to add a boot entry for Windows in GRUB that doesn't involve chainloading, which would break TPM based Bitlocker every time GRUB is updated.  
+Basically we are going to create an initramfs that sets the EFI BootNext variable and then reboots. This way, Windows always boots the same way - directly from the Windows Boot Manager, without even needing to know that GRUB exists. If Windows wants to update the boot manager, it already has a process for re-sealing the Bitlocker key in the TPM.
+
+DONE!
 
 ## Resources
 In addition to the resources linked in-line, these form the basis of the information contained within this guide, listed in no particular order.
-### Secure Boot
-1. http://www.rodsbooks.com/efi-bootloaders/controlling-sb.html
-2. https://wiki.gentoo.org/wiki/Sakaki%27s_EFI_Install_Guide/Configuring_Secure_Boot
-3. https://www.openssl.org/docs/man1.1.1/man1/openssl-req.html
-4. https://manpages.debian.org/unstable/efitools/index.html
-5. https://wiki.archlinux.org/index.php/Secure_Boot
+### TPM Fundamentals
+1. https://link.springer.com/book/10.1007%2F978-1-4302-6584-9
+2. https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/
+3. https://trustedcomputinggroup.org/resource/pc-client-platform-tpm-profile-ptp-specification/
+4. https://trustedcomputinggroup.org/resource/tpm-library-specification/
 ### Drive Encryption
 1. https://wiki.archlinux.org/index.php/Dm-crypt/Encrypting_an_entire_system#LUKS_on_a_partition
 2. https://gitlab.com/cryptsetup/cryptsetup/-/wikis/FrequentlyAskedQuestions#2-setup
@@ -349,9 +398,14 @@ In addition to the resources linked in-line, these form the basis of the informa
 4. https://gitlab.com/cryptsetup/cryptsetup
 5. https://wiki.archlinux.org/index.php/Dm-crypt
 ### TPM 2.0 Drive Key Sealing/Unlocking
-1. https://link.springer.com/book/10.1007%2F978-1-4302-6584-9
 1. https://tpm2-software.github.io/
 2. https://github.com/tpm2-software/tpm2-tools/tree/master/man
 3. https://medium.com/@pawitp/full-disk-encryption-on-arch-linux-backed-by-tpm-2-0-c0892cab9704
 4. https://blog.dowhile0.org/2017/10/18/automatic-luks-volumes-unlocking-using-a-tpm2-chip/
 5. https://threat.tevora.com/secure-boot-tpm-2/
+### Secure Boot
+1. http://www.rodsbooks.com/efi-bootloaders/controlling-sb.html
+2. https://wiki.gentoo.org/wiki/Sakaki%27s_EFI_Install_Guide/Configuring_Secure_Boot
+3. https://www.openssl.org/docs/man1.1.1/man1/openssl-req.html
+4. https://manpages.debian.org/unstable/efitools/index.html
+5. https://wiki.archlinux.org/index.php/Secure_Boot

@@ -16,13 +16,15 @@ The TPM can do a lot of things, but in the case of bitlocker (as well as what we
 But wait, I read that Wikipedia page! It said there were ways extract secrets from TPMs! Yes, it's not a flawless system, but if you read further about it, the only people with the resources to carry out such attacks probably already have your data, if they even want it. Joe Smith who picks up your lost laptop bag on the train and takes it home won't be able to. Consider what your realistic [threat model](https://en.wikipedia.org/wiki/Threat_model) is, and if this is something you need to be concerned with, this guide isn't what you need. Instead, you may want to get yourself a giant magnet to repel any [$5 wrenches](https://xkcd.com/538/) that might be swung in your direction.
 
 ### TPM Deep Dive
-This section, despite it's name, will really only scratch the surface, but it should give enough of an overview of how the TPM works that you will understand it's usage in this guide. Again, the free ebook linked above and at the end of this guide contains a wealth of information if you want to do a true deep dive like did in order to write this guide. You won't find a better resource.
+This section, despite it's name, will really only scratch the surface, but it should give enough of an overview of how the TPM works that you will understand it's usage in this guide. Again, the free ebook linked above and at the end of this guide contains a wealth of information if you want to do a true deep dive like I did in order to write this guide. You won't find a better resource.
 
 #### Platform Configuration Registers
 Platform Configuration Registers, or PCRs are the key feature of the TPM that we will be using. They are volatile memory locations within the TPM where the computer's firmware records "measurements" of the software that executes during the boot process (and possibly after boot as well). The values of the PCRs can be used to "seal" an encryption key (or another TPM object) with a policy that only allows the key to be released if the PCRs have the same value as they did when the polcy was created (which it is up to the user to determine is a trusted configuration). This is secure because unlike CPU registers, PCRs cannot be overritten or reset. They can only be "extended". All PCRs are initialized to zero at first power. Measurements are "extended" into the PCR by the firmware by passing the measurement to the TPM, which then "ORs" that data with the existing data in the PCR, takes a cryptograhic hash of the new value (usually sha1 or sha256) and then writes the hash digest to the PCR. "Measurements" are typically another cryptographic hash of the software binary or other data (such as configuration data) that is being measured.  
-A minimum of 24 PCRs are required on a standard PC. 
-Different PCRs contain measurements of different parts of the boot process. The TCG (the creators of the TPM specification) define which values should be extended into each PCR. It took me far too long to find this information as it wasn't in the main spec, but it can be found in the [PC Client Platform Firmware Profile
+A minimum of 24 PCRs are required on a standard PC, though some TPMs may have more, or might have multiple "banks" of 24 that use different hash algorithms. 
+Different PCRs contain measurements of different parts of the boot process. The TCG (the creators of the TPM specification) define which values should be extended into each PCR.  
+It took me far too long to find this information as it wasn't in the [TPM 2.0 Library Specification](https://trustedcomputinggroup.org/resource/tpm-library-specification/), or the [PC Client Platform TPM Profile Specification](https://trustedcomputinggroup.org/resource/pc-client-platform-tpm-profile-ptp-specification/), but it can be found in the [PC Client Platform Firmware Profile 
 Specification](https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/). To save you from reading that document, I have boiled the relevant parts down into the table below:  
+
 PCR&nbsp;&nbsp;&nbsp;|Description
 ---------------------|-----------
 0                    |UEFI BIOS Binary from ROM
@@ -30,11 +32,11 @@ PCR&nbsp;&nbsp;&nbsp;|Description
 2                    |??
 3                    |??
 4                    |Boot Loader (eg. GRUB)
-5                    |Boot Loader config (EFI boot entry path), and Drive Partition Table
-6                    |Platform Specific (your computer manufacturer can use this for whatever they want)
+5                    |Boot Loader Configuration (EFI boot entry path that points to the boot loader), and GPT/Partition Table data.
+6                    |Platform Specific (your computer manufacturer can use this for whatever they want).
 7                    |Secure Boot Policy
-8-15                 |Designated for use by the Operating System. For the purposes of this guide, note that GRUB extends measurements of it's configuration as well as your kernel image and initramfs into PCR 8
-16                   |Debug PCR. Note that this PCR can be reset manually without rebooting.
+8-15                 |Designated for use by the Operating System.<br>For the purposes of this guide, it is useful to note that GRUB extends measurements of it's configuration as well as your kernel image and initramfs into PCR 8. See [this manual section](https://www.gnu.org/software/grub/manual/grub/grub.html#Measured-Boot) for details.
+16                   |Debug PCR.<br>Note that this PCR can be reset manually without rebooting.
 17-22                |Reserved for Future use.
 23                   |??
 
@@ -60,12 +62,12 @@ An example partition scheme after doing this might be the following:
 We will be using this example partition map in the below commands. **Make sure you modify them to suit your system.**
 
 ### Setting up the Disk Encryption
-The next step is to set up disk encryption for your Linux partition. This will not be true full disk encryption because we will only be encrypting the Linux partition, but since our windows partition is encrypted with BitLocker, nearly the whole drive ends up being encrypted, just with different keys. We will not be encrypting the efi system partition, instead relying on secure boot signing to prevent tampering. If you want an encrypted efi partition that is beyond the scope of this guide, but there are guides avaiable online that can help with this.  
+The next step is to set up disk encryption for your Linux partition. This will not be true full disk encryption because we will only be encrypting the Linux partition, but since our windows partition is encrypted with BitLocker, nearly the whole drive ends up being encrypted, just with different keys. We will not be encrypting the efi system partition, instead relying on secure boot signing and PCR measurements to prevent tampering. If you want an encrypted efi partition that is beyond the scope of this guide, but there are guides avaiable online that can help with this.  
 For the purposes of this guide, we will only be encrpyting a single partition, with the assumption that your entire Linux system is on that partion, rather than having separate partitions for directories like `/home` which aren't necessary in most single-user cases.
 
 #### dm-crypt and LUKS
 `dm-crypt` is a Linux kernel module that is part of the kernel device mapper framework. If you are framiliar with LVM or software RAID, it uses the same base kernel functionality with the addition of encryption. `dm-crypt` supports multiple disk encrpytion methods and can even be stacked with LVM and/or RAID.  
-Here we will be using LUKS encryption on a single volume mapped to a single real disk partition. LUKS stands for Linux Unified Key Setup and is the de facto standard for disk encryption on Linux, providing a consistent transferable system across distributions. For more information on LUKS and how it works, look at #4 in the resources section on drive encryption.
+Here we will be using LUKS encryption on a single volume mapped to a single real disk partition. LUKS stands for Linux Unified Key Setup and is the de facto standard for disk encryption on Linux, providing a consistent transferable system across distributions. For more information on LUKS and how it works, there are some great explanations at the [official project repository](https://gitlab.com/cryptsetup/cryptsetup).
 
 #### Creating a LUKS encrypted Volume with `cryptsetup`
 To help set everything up, we will use `cryptsetup`, which is the most commonly used cli for `dm-crypt` based disk encryption, as well as the reference implementation for LUKS. The version used to make this guide was 2.2.2  
@@ -129,7 +131,7 @@ You will then have to open the file and remove the `#` from each mirror to activ
 #### Packages
 Run this command to install all the basic packages you will need for this guide (plus one or two useful utilities that you will probably just install later anyway):
 ```
-# pacstrap /mnt base linux linux-firmware vim sudo man-db man-pages texinfo rng-tools cryptsetup efitools sbsigntools parted ntp grub efibootmgr tpm2-tools
+# pacstrap /mnt base linux linux-firmware vim sudo man-db man-pages texinfo rng-tools cryptsetup efitools sbsigntools parted ntp grub efibootmgr tpm2-tools tpm2-tss-engine
 ```
 If you prefer the packages listed on separate lines (eaiser to read), here they are, in no particular order:
 ```
@@ -150,6 +152,7 @@ ntp
 grub
 efibootmgr
 tpm2-tools
+tpm2-tss-engine
 ```
 
 #### Genfstab
@@ -235,8 +238,8 @@ Pacman hooks!
 
 ## Configuring Secure Boot
 The first step is to take control of secure boot on your machine by replacing the secure boot certificates with your own, while retaining the default keys so you can still secure boot windows and get firmware updates.  
-It is recommended to read at least the first portion of #1 in the secure boot resources section before proceeding to get a background on how secure boot works.
-Another excellent resource is #2. Both are guides similar to this one. Feel free to use them instead of this one if they work for you. In particular, this guide only describes one pathway to configure secure boot (though it is the pathway that will hopefully work in the most cases). If it doesn't work for your hardware/firmware, the linked guides have other methods that may work.  
+It is recommended to read at least the first portion of [Rod's Guide to Controlling Secure Boot](http://www.rodsbooks.com/efi-bootloaders/controlling-sb.html) before proceeding to get a background on how secure boot works.
+Another excellent resource is [This Guide from the Gentoo Wiki](https://wiki.gentoo.org/wiki/Sakaki%27s_EFI_Install_Guide/Configuring_Secure_Boot). Both are guides similar to this one. Feel free to use them instead of this one if they work for you. In particular, this guide only describes one pathway to configure secure boot (though it is the pathway that will hopefully work in the most cases). If it doesn't work for your hardware/firmware, the linked guides have other methods that may work.  
 This section can be completed either using an Arch Linux live disk, or an already installed Arch Linux system. The reader is responsible for installing any needed packages, and for ensuring the security of their private keys (to be generated below).
 
 ### Generating New Secure Boot Keys
@@ -373,7 +376,7 @@ If you want to quickly test your handywork `efitools` supplies a `HelloWorld` ef
 # mv /boot/EFI/Boot/bootx64.efi /boot/EFI/Boot/bootx64-prev.efi
 # sbsign --key db.key --cert db.crt --output /boot/EFI/Boot/bootx64.efi /usr/share/efitools/efi/HelloWorld.efi
 ```
-This will rename your current default boot entry to bootx64-prev.efi to you can restore it after the test, and then sign and copy HelloWorld.efi into the default efi boot location so it will automaticlly boot. After running this, reboot, and enter BIOS setup. Enable secure boot and save. When you exit setup it should try to boot the HelloWorld binary we just copied, and becasue we signed it, it should work. If it doesn't, then something went wrong up above.
+This will rename your current default boot entry to bootx64-prev.efi so you can restore it after the test, and then sign and copy HelloWorld.efi into the default efi boot location so it will automaticlly boot. After running this, reboot, and enter BIOS setup. Enable secure boot and save. When you exit setup it should try to boot the HelloWorld binary we just copied, and becasue we signed it, it should work. If it doesn't, then something went wrong up above.
 
 ## Signing your bootloader and kernel automatically on update
 More Pacman hooks!
@@ -381,8 +384,7 @@ More Pacman hooks!
 ## Dual Booting with Windows without breaking Bitlocker on every bootloader update
 Here we're going to do a little initramfs magic to add a boot entry for Windows in GRUB that doesn't involve chainloading, which would break TPM based Bitlocker every time GRUB is updated.  
 Basically we are going to create an initramfs that sets the EFI BootNext variable and then reboots. This way, Windows always boots the same way - directly from the Windows Boot Manager, without even needing to know that GRUB exists. If Windows wants to update the boot manager, it already has a process for re-sealing the Bitlocker key in the TPM.
-
-DONE!
+I couldn't find a way to do this directly in GRUB. If you know how, please let me know or submit a PR!
 
 ## Resources
 In addition to the resources linked in-line, these form the basis of the information contained within this guide, listed in no particular order.

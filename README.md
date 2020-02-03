@@ -1,22 +1,26 @@
 # Dual Booting Arch Linux and Windows 10 with Secure Boot and Encrypted Disks
-So you want to dual boot Arch Linux and Windows 10, both with disk encryption. On Windows you have bitlocker turned on which encrpyts your disk without requiring a password on every boot. Then you disable secure boot to install Arch and now bitlocker is demanding that you either turn secure boot back on, or enter your recovery key each and every time you boot windows. Not ideal. This guide will help you take control of secure boot on your computer so that you can sign your Linux kernel and run it with secure boot turned on, as well as show you how to set up "bitlocker-like" disk encryption for your Linux partition (so you don't have to enter a password every time for linux either). It is not for beginners, and expects a certain knowledge level of Linux, or at least an ability to look things up and learn as you go, just as with many other aspects of running Arch Linux as opposed to Ubuntu or similar "user friendly" distributions. While this guide attempts to include as many details as possible, it is far from exhaustive, and it is up to the reader to fill in the gaps.
+So you want to dual boot Arch Linux and Windows 10, both with disk encryption. On Windows you have bitlocker turned on which encrpyts your disk without requiring a password on every boot. Then you disable secure boot to install Arch and now bitlocker is demanding that you either turn secure boot back on, or enter your recovery key each and every time you boot windows. Not ideal. This guide will help you take control of secure boot on your computer so that you can sign your Linux kernel and run it with secure boot turned on, as well as show you how to set up "bitlocker-like" disk encryption for your Linux partition (so you don't have to enter a password every time for Linux either). It is not for beginners, and expects a certain knowledge level of Linux, or at least an ability to look things up and learn as you go, just as with many other aspects of running Arch Linux as opposed to Ubuntu or similar "user friendly" distributions. While this guide attempts to include as many details as possible, it is far from exhaustive, and it is up to the reader to fill in the gaps.
 
 ## Before You Begin
-You want to disable Windows Bitlocker before proceeding, as we will be making changes that will result in the TPM not releasing the keys needed to decrypt the disk automatically. Read on to understand what this means (indeed, it is strongly suggested that you read the entire guide and suggested reference material before you begin so you can do further research to answer any questions you might have).  
-For disk encryption on Linux, it is easier to setup before installing Linux, as it involves the creation of a new encrypted logical volume on top of a physical partition. Alternatively, you can take a backup, or use remaining free space on the disk temporarily. This guide will only cover encrypting a new Linux installation (indeed, it briefly runs through installing a barebones Arch Linux system).  
-Also, be sure to install the `rng-tools` package (this is not included on an Arch live disk by default) and start `rngd.service`. This will feed output from any hardware random number generators on your system (such as a TPM) into `/dev/random` and `/dev/urandom`, which are used to help with cryptogrphic key generation. Getting into why this matters is well beyond the scope of this guide, but suffice it to say, this will help ensure your system has enough entropy to generate strong cryptographic keys that cannot be reproduced easily.  
-The actual procedure described here should take about an hour if you already know what you are doing (because you read the guide through first).
+You want to disable Windows Bitlocker before proceeding, as we will be making changes that will result in the TPM not releasing the keys needed to decrypt the disk automatically. Read on to understand what this means (in fact, it is strongly suggested that you read the entire guide and suggested reference material before you begin so you can do further research to answer any questions you might have). The actual procedure described in this guide should take about an hour if you already know what you are doing (because you read the guide through first or are otherwise already knowledgeable).  
+For disk encryption on Linux, it is easier to setup before installing Linux, as it involves the creation of a new encrypted logical volume on top of a physical partition. Alternatively, you can take a backup, or use remaining free space on the disk temporarily. This guide will only cover encrypting a new Linux installation (it briefly runs through installing a barebones Arch Linux system).  
+The beginning part of this guide assumes you are using a recent copy of the Arch Linux Live Disk. Once you have disabled secure boot and booted into the Arch Live Disk, install the following tools, as they are not included on the Live Disk and will be needed before we install the new system:
+```
+# pacman -S tpm2-tools 
+```
+Later we will turn secure boot back on, but we can't boot the live disk with it on.  
 
 ## How Bitlocker securely encrypts your drive without requiring a password at every boot.
-Bitlocker works by storing your disk's encryption key in a hardware device called a Trusted Platform Module, or TPM. 
+Before diving into the how to part of this guide, it is important underand on a basic level how Bitlocker and the hardware it depends on works in order to be able to setup a similar system for Linux. In short, Bitlocker works by storing your disk's encryption key in a hardware device called a Trusted Platform Module, or TPM, and the key is only released if the computer boots in a trusted configuration. 
 
 ### What is a TPM?
-For a good overview of what a TPM is and what it can do, go read [this](https://en.wikipedia.org/wiki/Trusted_Platform_Module) and the first chapter of [this book](https://link.springer.com/book/10.1007%2F978-1-4302-6584-9) (or all of it really). That free book is arguably the single most useful resource for understanding the otherwise poorly docmented TPM.  
-The TPM can do a lot of things, but in the case of bitlocker (as well as what we are about to do in linux) it is used to cryptographically secure our disk encryption key in such a way that it can only be retrieved if the machine boots with the software we expect ([Platform Integrity](https://en.wikipedia.org/wiki/Trusted_Platform_Module#Platform_integrity)). This means that if someone where to try to boot from a live disk, or replace your bootloader or kernel ([evil maid attack](https://en.wikipedia.org/wiki/Evil_maid_attack)), the TPM will not release the disk encryption key.  
+For a good overview of what a TPM is and what it can do, go read [this](https://en.wikipedia.org/wiki/Trusted_Platform_Module) and the first chapter of [this book](https://link.springer.com/book/10.1007%2F978-1-4302-6584-9) (or all of it really). That free book is arguably the single most useful resource for understanding the otherwise poorly docmented TPM. Note that here "poorly" is meant as in it is difficult to understand the documentation, not that every little detail isn't documented (because it is).  
+The TPM can do a lot of things, but in the case of Bitlocker (as well as what we are about to do in Linux) it is used to cryptographically secure our disk encryption key in such a way that it can only be retrieved if the machine boots with the software we expect ([Platform Integrity](https://en.wikipedia.org/wiki/Trusted_Platform_Module#Platform_integrity)). This means that if someone where to try to boot from a live disk, or replace your bootloader or kernel ([evil maid attack](https://en.wikipedia.org/wiki/Evil_maid_attack)), the TPM will not release the disk encryption key.  
 But wait, I read that Wikipedia page! It said there were ways extract secrets from TPMs! Yes, it's not a flawless system, but if you read further about it, the only people with the resources to carry out such attacks probably already have your data, if they even want it. Joe Smith who picks up your lost laptop bag on the train and takes it home won't be able to. Consider what your realistic [threat model](https://en.wikipedia.org/wiki/Threat_model) is, and if this is something you need to be concerned with, this guide isn't what you need. Instead, you may want to get yourself a giant magnet to repel any [$5 wrenches](https://xkcd.com/538/) that might be swung in your direction.
 
 ### How the TPM works
-This section will really only scratch the surface, but it should give enough of an overview of how the TPM works that you will understand it's usage in this guide. Again, the free ebook linked above and at the end of this guide contains a wealth of information if you want to do a true deep dive like I did in order to write this guide. You won't find a better resource.
+This section will really only scratch the surface, but it should give enough of an overview of how the TPM works that you will understand it's usage in this guide. Again, the free ebook linked above and at the end of this guide contains a wealth of information if you want to do a true deep dive like I did in order to write this guide. You won't find a better resource.  
+Note that this guide assumes you are using a TPM that implements TPM 2.0, not TPM 1.2
 
 #### Platform Configuration Registers
 Platform Configuration Registers, or PCRs are the key feature of the TPM that we will be using. They are volatile memory locations within the TPM where the computer's firmware records "measurements" of the software that executes during the boot process (and possibly after boot as well). The values of the PCRs can be used to "seal" an encryption key (or another TPM object) with a policy that only allows the key to be released if the PCRs have the same value as they did when the polcy was created (which it is up to the user to determine is a trusted configuration). This is secure because unlike CPU registers, PCRs cannot be overritten or reset. They can only be "extended". All PCRs are initialized to zero at first power. Measurements are "extended" into the PCR by the firmware by passing the measurement to the TPM, which then "ORs" that data with the existing data in the PCR, takes a cryptograhic hash of the new value (usually sha1 or sha256) and then writes the hash digest to the PCR. "Measurements" are typically another cryptographic hash of the software binary or other data (such as configuration data) that is being measured.  
@@ -42,7 +46,7 @@ PCR&nbsp;&nbsp;&nbsp;|Description
 
 #### TPM Objects and Heirachies
 Heirarchies are collections of TPM entities (such as keys or data) that are managed as a group. The TPM 2.0 Specificatoin defines three persistent heirarchies for different purposes: Endorsement, Platform, and Owner (sometimes refered to as "Storage") - plus a NULL heirarchy that is volatile. Each of these heirarchies is initialized with a large seed generated by the TPM that is never ever exposed outside the hardware. This seed is used to create primary keys at the top of each heirarchy. These keys are in turn used to encrypt child objects, wich can encrypt their children and so on, in a tree structure. Parents and all their children can be erased as a group if needed. Hierarchies are not limited to a single primary key, but can effectively have an unlimited number, though they cannot all be stored on the TPM. For this guide we will only be concerned with the Owner heirarchy, which is meant for end-users (though it really doesn't matter which you use, aside from the NULL heirarchy, the seed for which is regenerated on each boot).  
-The main type of TPM Objects that this guide will deal with are primary keys, and child keys. Keys, like nearly all TPM entities, can have their access restricted in two main ways: Authorization Values (think passwords), and Policies. Policy based access control of TPM managed keys is how Bitlocker securely stores the disk encryption key and is able to retrieve it without having to ask for a password. It locks the disk encryption key with a policy that requires certain PCRs to have the same value during the current boot as they had when Bitlocker was enabled (which the user determined was a trusted boot configuration by turning on Bitlocker at that time.). In a similar manner, this guide will be storing a LUKS passphrase in the TPM locked with a policy based on PCR values. Policies are extremely powerful and can go far beyond matching PCR values, but you will have to read into that on your own. The only other policy feature we will be using is the Wildcard Policy. This is a policy that is satisfied by another policy (that is also satisfied) that is signed by an authorization key. Policies are immutable once created, so this allows for a more flexible policy. This allows us to seal the LUKS key once, but still update the PCR values that it is sealed against, since we can pass an updated second policy to the TPM when we update the BIOS or the Bootloader, among others.
+The main type of TPM Objects that this guide will deal with are primary keys, and child keys. Keys, like nearly all TPM entities, can have their access restricted in two main ways: Authorization Values (think passwords), and Policies. Policy based access control of TPM managed keys is how Bitlocker securely stores the disk encryption key and is able to retrieve it without having to ask for a password. It locks the disk encryption key with a policy that requires certain PCRs to have the same value during the current boot as they had when Bitlocker was enabled (which the user determined was a trusted boot configuration by turning on Bitlocker at that time.). In a similar manner, this guide will be storing a LUKS passphrase in the TPM locked with a policy based on PCR values. Policies are extremely powerful and can go far beyond matching PCR values, but you will have to read into that on your own. The only other policy feature we will be using is the Wildcard Policy. This is a policy that is satisfied by another policy (that must also satisfied) that is signed by an authorization key. Policies are immutable once created, so this allows for a more flexible policy. This allows us to seal the LUKS key once, but still update the PCR values that it is sealed against, since we can pass an updated second policy to the TPM when we update the BIOS or the Bootloader, among others.
 
 ## Installing Arch Linux on an Encrypted Disk alongside Windows with Bitlocker
 This guide wasn't initially going to include Arch Installation steps, but it is easiest to set all this up while doing a fresh install. Only steps that are not part of a typical install will be covered in detail. Everything else will be listed in brief only. See the [Official Install Guide](https://wiki.archlinux.org/index.php/Installation_guide) for details. Further, these steps will only install the bare minimum needed to boot Arch and do everything outlined in this guide.
@@ -66,27 +70,52 @@ An example partition scheme after doing this might be the following:
 We will be using this example partition map in the below commands. **Make sure you modify them to suit your system.**
 
 ### Setting up the Disk Encryption
-The next step is to set up disk encryption for your Linux partition. This will not be true full disk encryption because we will only be encrypting the Linux partition, but since our windows partition is encrypted with BitLocker, nearly the whole drive ends up being encrypted, just with different keys. We will not be encrypting the efi system partition, instead relying on secure boot signing and PCR measurements to prevent tampering. If you want an encrypted efi partition that is beyond the scope of this guide, but there are guides avaiable online that can help with this.  
+The next step is to set up disk encryption for your Linux partition. This will not be true full disk encryption because we will only be encrypting the Linux partition, but since our windows partition is encrypted with BitLocker, nearly the whole drive ends up being encrypted, just with different keys. We will not be encrypting the efi system partition, instead relying on secure boot signing and PCR measurements to prevent tampering. If you want an encrypted efi partition that is beyond the scope of this guide, but there are guides available that can help with this.  
 For the purposes of this guide, we will only be encrpyting a single partition, with the assumption that your entire Linux system is on that partion, rather than having separate partitions for directories like `/home` which aren't necessary in most single-user cases.
 
 #### dm-crypt and LUKS
 `dm-crypt` is a Linux kernel module that is part of the kernel device mapper framework. If you are framiliar with LVM or software RAID, it uses the same base kernel functionality with the addition of encryption. `dm-crypt` supports multiple disk encrpytion methods and can even be stacked with LVM and/or RAID.  
-Here we will be using LUKS encryption on a single volume mapped to a single real disk partition. LUKS stands for Linux Unified Key Setup and is the de facto standard for disk encryption on Linux, providing a consistent transferable system across distributions. For more information on LUKS and how it works, there are some great explanations at the [official project repository](https://gitlab.com/cryptsetup/cryptsetup).
+Here we will be using LUKS encryption of a single volume mapped to a single real disk partition. LUKS stands for Linux Unified Key Setup and is the de facto standard for disk encryption on Linux, providing a consistent transferable system across distributions. For more information on LUKS and how it works, there are some great explanations at the [official project repository](https://gitlab.com/cryptsetup/cryptsetup).
 
 #### Creating a LUKS encrypted Volume with `cryptsetup`
 To help set everything up, we will use `cryptsetup`, which is the most commonly used cli for `dm-crypt` based disk encryption, as well as the reference implementation for LUKS. The version used to make this guide was 2.2.2  
+
+##### Generating the LUKS MasterKey with the TPM (Optional)
+The TPM has a built in [TRNG](https://en.wikipedia.org/wiki/Hardware_random_number_generator) that is potentially a better source of entropy than `/dev/random` and `/dev/urandom`. This is not to say that either of those are bad. In most cases they are actually very good sources of entropy! I'm not going to get into why you would want to use one or the other. That is left to you to research and determine. If you want, you can generate your LUKS master key with the TPM rather than `cryptsetup`'s default of `/dev/urandom`.  
+To do this, we will first create a 100mb ramfs to work in, so that the key is never saved to a disk in the clear:
+```
+# mount -t ramfs -o 100m ramfs /path/to/your/chosen/mountpoint
+```
+You want to use ramfs rather than tmpfs because tmpfs can be swapped to the disk, while ramfs cannot. Further details on this are left to the reader.   
+
+Then we will use `tpm2_getrandom` to generate 256 random bits as the key:
+```
+# tpm2_getrandom 32 > /path/to/your/chosen/mountpoint/mk.bin
+```
+Note the amount of data here is specified in MB, so 32*8=256 bits, which also happens to be the current default keysize for LUKS.  
+
+Feed that into the command in the next section by adding the following flag:
+```
+--master-key-file /path/to/your/chosen/mountpoint/mk.bin
+```
 
 ##### Format the partition
 
 Assuming that your drive is already partitioned the way you want, the following command will format the given partition as a LUKS partition:
 ```
-# cryptsetup -y -v luksFormat /dev/sda5
+# cryptsetup luksFormat /dev/sda5 --verify-passphrase --verbose --iter-time 10000
 ```
-`-y` requires the passcode to unlock the LUKS partition to be entered twice, similar to other "comfirm your password" mechanisms.  
-`-v` enables verbose mode.  
 `luksFormat` tells `cryptsetup` to format the given device as a LUKS device.  
 `/dev/sda5` the device to format as a LUKS device.  
-There are a multitude of other options available surrounding how keys are generated, among other things, but in general the defaults will be more than enough for you unless you are using an older/less powerful computer or have specific requirements. Do your own reading to determine which other settings you might want. The `cryptsetup` FAQ and manpage (resource #2 and #3 contain a wealth of information.)  
+`--verify-passphrase` requires the passcode to unlock the LUKS partition to be entered twice, similar to other "comfirm your password" mechanisms.  
+`--verbose` enables verbose mode.  
+`--iter-time 10000` this manually sets the keyslot iteration time to 10 seconds.  
+>Note on Iteration Time  
+A keyslot iteration time of 10 seconds means that it will take 10 seconds (based on the speed of your current cpu) to unlock the drive using the passphrase. This is to compensate for a possibly weak passphrase and make it costly for an attacker to brute-force or dictionary attack it because it requires 10 seconds per attempt. The LUKS default is 1 second, in order to balance security and convenience. If you are confident in your passphrase you can choose to omit this and use the default (or set it to another value of your choice). For the configuration shown in this guide, the passphrase set here is considered a backup or fallback, and will not be used very often; thus making the 10 second wait time a nice feature that won't typically add to your boot time. Later we will be setting another passphrase that keeps the default 1 second, and is sealed into the TPM for automated unlocking on boot. Under most circumstances this second passphrase is the one that will be used, and it will be a randomly generated with the TPM's hardware random number generator to ensure that it has the highest possible entropy.  
+
+There are a number of other options available surrounding how keys are generated, among other things, but in general the defaults will be more than enough for you unless you are using an older/less powerful computer or have specific requirements such as using something stronger than AES128 (With a keysize of 256 bits, aes-xts works out to AES128 level security).  
+`cryptsetup --help` outputs the defaults that were compiled into your version of the tool. Mine for LUKS are `cipher: aes-xts-plain64, key size: 256 bits, passphrase hashing: sha256, RNG: /dev/urandom`.  
+Do your own reading to determine which other settings you might want. The `cryptsetup` [FAQ](https://gitlab.com/cryptsetup/cryptsetup/-/wikis/FrequentlyAskedQuestions#2-setup) and [manpage](https://manpages.debian.org/unstable/cryptsetup-bin/cryptsetup.8.en.html) contain a wealth of information.
 
 ##### Open the LUKS partition
 
@@ -160,7 +189,7 @@ tpm2-tss-engine
 ```
 
 #### Genfstab
-Mount your efi partition at `/mnt/efi` (unmount it first if you had it mounted elsewhere before now). You will have to create that directory first too.  
+Mount your efi partition at `/mnt/efi`. You will have to create that directory first.  
 For this guide, the future system's `/boot` directory will be bind mounted at `/efi/EFI/arch`:
 ```
 # mount --bind /mnt/efi/EFI/arch /mnt/boot
@@ -189,7 +218,7 @@ For this system we are using `grub` because it has features like TPM and Secure 
 ```
 This installs grub in your efi partition, with the tpm module packaged into the core binary. It also creates an efi boot entry for "GRUB", which is also moved to the top of your boot order.
 
-Edit `/etc/defaults/grub` to include the `tpm` module at the beginning of the `GRUB_PRELOAD_MODULES` setting then generate the config:
+Edit `/etc/default/grub` to include the `tpm` module at the beginning of the `GRUB_PRELOAD_MODULES` setting then generate the config:
 
 ```
 # grub-mkconfig -o /boot/grub/grub.cfg
@@ -391,7 +420,7 @@ Basically we are going to create an initramfs that sets the EFI BootNext variabl
 I couldn't find a way to do this directly in GRUB. If you know how, please let me know or submit a PR!
 
 ## Resources
-In addition to the resources linked in-line, these form the basis of the information contained within this guide, listed in no particular order.
+Most of these resources linked in-line. All of these form the basis for the information contained within this guide, listed in no particular order, but organize by general topic area. I've included links to online man pages and other documentation for most of the tools used.
 ### TPM Fundamentals
 1. https://link.springer.com/book/10.1007%2F978-1-4302-6584-9
 2. https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/

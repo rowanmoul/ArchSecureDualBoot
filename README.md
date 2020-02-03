@@ -92,7 +92,7 @@ Then we will use `tpm2_getrandom` to generate 256 random bits as the key:
 ```
 # tpm2_getrandom 32 > /path/to/your/chosen/mountpoint/mk.bin
 ```
-Note the amount of data here is specified in MB, so 32*8=256 bits, which also happens to be the current default keysize for LUKS.  
+Note the amount of data here is specified in Bytes, so 32*8=256 bits, which also happens to be the current default keysize for LUKS.  
 
 Feed that into the command in the next section by adding the following flag:
 ```

@@ -232,10 +232,17 @@ Just call `passwd` to set it, since you are already the root user.
 
 ### Unlocking LUKS with TPM 2.0
 
+#### Mount a Ramfs as a working directory
+It's always a good idea to use a ramfs when generating keys. Refer above in the optional section about generating a master key to see how to mount a ramfs, or use the same one if you didn't unmount it.
+
 #### Sealing your LUKS passphrase with the TPM
-Create a primary object under the owner heirachy.
+
+##### Generate a primary key
+The primary key sits at the top of the TPM hierarchy and is used to encrypt it's child keys within the TPM. If the primary is compromised, so is every key under it.  
+With that in mind, the best way to ensure nobody else can access and use your primary key is to not store anywhere. How does that work? Primary keys are derived from the Heirachy Primary Seed (in this case, the Owner Primary Seed). The derivation function is deterministic. Given the same seed and the same key template, it can regenerate the same key every time. This means that the only thing we need to do is make sure our template is unique. We can do this by supplying some unique data only known to us during the creation of the primary key. This is sort of like generating the key with two seeds.  
+To generate the unique data, you can use the TPM's TRNG, or some other source of entropy of your choice.
 ```
-# tpm2_creatprimary --heirachy=o --key-auth=someprivatekey --hash-algorithm=sha256 --key-algorithm=rsa4096:aes256cfb --key-context=somecontextfilepath --attributes=someattributes
+# tpm2_creatprimary --heirachy=o --key-auth=someprivatekey --key-context=somecontextfilepath
 ```
 Being explicit - some of these are default
 

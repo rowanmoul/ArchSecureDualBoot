@@ -4,17 +4,18 @@ So you want to dual boot Arch Linux and Windows 10, both with disk encryption. O
 ## Before You Begin
 You want to disable Windows Bitlocker before proceeding, as we will be making changes that will result in the TPM not releasing the keys needed to decrypt the disk automatically. Read on to understand what this means (in fact, it is strongly suggested that you read the entire guide and suggested reference material before you begin so you can do further research to answer any questions you might have). The actual procedure described in this guide should take about an hour if you already know what you are doing (because you read the guide through first or are otherwise already knowledgeable).  
 For disk encryption on Linux, it is easier to setup before installing Linux, as it involves the creation of a new encrypted logical volume on top of a physical partition. Alternatively, you can take a backup, or use remaining free space on the disk temporarily. This guide will only cover encrypting a new Linux installation (it briefly runs through installing a barebones Arch Linux system).  
-The beginning part of this guide assumes you are using a recent copy of the Arch Linux Live Disk. Once you have disabled secure boot and booted into the Arch Live Disk, install the following tools, as they are not included on the Live Disk and will be needed before we install the new system:
+The beginning part of this guide assumes you are using a recent copy of the Arch Linux Live Disk. Once you have disabled secure boot and booted into the Arch Live Disk, install and start the following tools and services, as they are not included on the Live Disk and will be needed before we install the new system:
 ```
-# pacman -S tpm2-tools 
+# pacman -Sy tpm2-tools tpm2-abrmd
+# systemctl start tpm2-abrmd
 ```
 Later we will turn secure boot back on, but we can't boot the live disk with it on.  
 
 ## How Bitlocker securely encrypts your drive without requiring a password at every boot.
-Before diving into the how to part of this guide, it is important underand on a basic level how Bitlocker and the hardware it depends on works in order to be able to setup a similar system for Linux. In short, Bitlocker works by storing your disk's encryption key in a hardware device called a Trusted Platform Module, or TPM, and the key is only released if the computer boots in a trusted configuration. 
+Before diving into the how-to part of this guide, it is important underand on a basic level how Bitlocker and the hardware it depends on works in order to be able to setup a similar system for Linux. In short, Bitlocker works by storing your disk's encryption key in a hardware device called a Trusted Platform Module, or TPM, and the key is only released if the computer boots in a trusted configuration. 
 
 ### What is a TPM?
-For a good overview of what a TPM is and what it can do, go read [this](https://en.wikipedia.org/wiki/Trusted_Platform_Module) and the first chapter of [this book](https://link.springer.com/book/10.1007%2F978-1-4302-6584-9) (or all of it really). That free book is arguably the single most useful resource for understanding the otherwise poorly docmented TPM. Note that here "poorly" is meant as in it is difficult to understand the documentation, not that every little detail isn't documented (because it is).  
+For a good overview of what a TPM is and what it can do, go read [this](https://en.wikipedia.org/wiki/Trusted_Platform_Module) and the first chapter of [this book](https://link.springer.com/book/10.1007%2F978-1-4302-6584-9) (or all of it really). That free book is arguably the single most useful resource for understanding the otherwise poorly docmented TPM. Note that here "poorly" is meant as in it is difficult to understand the documentation, not that every little detail isn't documented and specified (because it really is).  
 The TPM can do a lot of things, but in the case of Bitlocker (as well as what we are about to do in Linux) it is used to cryptographically secure our disk encryption key in such a way that it can only be retrieved if the machine boots with the software we expect ([Platform Integrity](https://en.wikipedia.org/wiki/Trusted_Platform_Module#Platform_integrity)). This means that if someone where to try to boot from a live disk, or replace your bootloader or kernel ([evil maid attack](https://en.wikipedia.org/wiki/Evil_maid_attack)), the TPM will not release the disk encryption key.  
 But wait, I read that Wikipedia page! It said there were ways extract secrets from TPMs! Yes, it's not a flawless system, but if you read further about it, the only people with the resources to carry out such attacks probably already have your data, if they even want it. Joe Smith who picks up your lost laptop bag on the train and takes it home won't be able to. Consider what your realistic [threat model](https://en.wikipedia.org/wiki/Threat_model) is, and if this is something you need to be concerned with, this guide isn't what you need. Instead, you may want to get yourself a giant magnet to repel any [$5 wrenches](https://xkcd.com/538/) that might be swung in your direction.
 
@@ -25,9 +26,9 @@ Note that this guide assumes you are using a TPM that implements TPM 2.0, not TP
 #### Platform Configuration Registers
 Platform Configuration Registers, or PCRs are the key feature of the TPM that we will be using. They are volatile memory locations within the TPM where the computer's firmware records "measurements" of the software that executes during the boot process (and possibly after boot as well). The values of the PCRs can be used to "seal" an encryption key (or another TPM object) with a policy that only allows the key to be released if the PCRs have the same value as they did when the polcy was created (which it is up to the user to determine is a trusted configuration). This is secure because unlike CPU registers, PCRs cannot be overritten or reset. They can only be "extended". All PCRs are initialized to zero at first power. Measurements are "extended" into the PCR by the firmware by passing the measurement to the TPM, which then "ORs" that data with the existing data in the PCR, takes a cryptograhic hash of the new value (usually sha1 or sha256) and then writes the hash digest to the PCR. "Measurements" are typically another cryptographic hash of the software binary or other data (such as configuration data) that is being measured.  
 A minimum of 24 PCRs are required on a standard PC, though some TPMs may have more, or might have multiple "banks" of 24 that use different hash algorithms. 
-Different PCRs contain measurements of different parts of the boot process. The TCG (the creators of the TPM specification) define which values should be extended into each PCR.  
-It took me far too long to find this information as it wasn't in the [TPM 2.0 Library Specification](https://trustedcomputinggroup.org/resource/tpm-library-specification/), or the [PC Client Platform TPM Profile Specification](https://trustedcomputinggroup.org/resource/pc-client-platform-tpm-profile-ptp-specification/). It can be found in the [PC Client Platform Firmware Profile 
-Specification](https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/). To save you from reading that document, I have boiled the relevant parts down into the table below. This table is not exhastive, which is why nearly a quarter of the firmware specification deals directly with PCR usage. However it should give you a good idea of what values are measured into each PCR so that you know when to expect the values to change (such as when you update your BIOS, Kernel, or Boot Loader).  
+Different PCRs contain measurements of different parts of the boot process. The Trusted Computing Group (TCG), the creators of the TPM specification, define which values should be extended into each PCR.  
+It took me far too long to find this information unfortunately. It wasn't in the [TPM 2.0 Library Specification](https://trustedcomputinggroup.org/resource/tpm-library-specification/), or the [PC Client Platform TPM Profile Specification](https://trustedcomputinggroup.org/resource/pc-client-platform-tpm-profile-ptp-specification/). It can be found in the [PC Client Platform Firmware Profile 
+Specification](https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/). The TCG seem to have the unfortunate philosophy of "don't repeat yourself ever if at all possible" so you have to read parts of six documents to get the full picture of anything. To save you from all that, I have boiled the relevant parts down into the table below. This table is not exhastive, which is why nearly a quarter of the firmware specification deals directly with PCR usage. However it should give you a good idea of what values are measured into each PCR so that you know when to expect the values to change (such as when you update your BIOS, Kernel, or Boot Loader).  
 
 PCR&nbsp;&nbsp;&nbsp;|Description
 ---------------------|-----------
@@ -46,7 +47,17 @@ PCR&nbsp;&nbsp;&nbsp;|Description
 
 #### TPM Objects and Heirachies
 Heirarchies are collections of TPM entities (such as keys or data) that are managed as a group. The TPM 2.0 Specificatoin defines three persistent heirarchies for different purposes: Endorsement, Platform, and Owner (sometimes refered to as "Storage") - plus a NULL heirarchy that is volatile. Each of these heirarchies is initialized with a large seed generated by the TPM that is never ever exposed outside the hardware. This seed is used to create primary keys at the top of each heirarchy. These keys are in turn used to encrypt child objects, wich can encrypt their children and so on, in a tree structure. Parents and all their children can be erased as a group if needed. Hierarchies are not limited to a single primary key, but can effectively have an unlimited number, though they cannot all be stored on the TPM. For this guide we will only be concerned with the Owner heirarchy, which is meant for end-users (though it really doesn't matter which you use, aside from the NULL heirarchy, the seed for which is regenerated on each boot).  
+
 The main type of TPM Objects that this guide will deal with are primary keys, and child keys. Keys, like nearly all TPM entities, can have their access restricted in two main ways: Authorization Values (think passwords), and Policies. Policy based access control of TPM managed keys is how Bitlocker securely stores the disk encryption key and is able to retrieve it without having to ask for a password. It locks the disk encryption key with a policy that requires certain PCRs to have the same value during the current boot as they had when Bitlocker was enabled (which the user determined was a trusted boot configuration by turning on Bitlocker at that time.). In a similar manner, this guide will be storing a LUKS passphrase in the TPM locked with a policy based on PCR values. Policies are extremely powerful and can go far beyond matching PCR values, but you will have to read into that on your own. The only other policy feature we will be using is the Wildcard Policy. This is a policy that is satisfied by another policy (that must also satisfied) that is signed by an authorization key. Policies are immutable once created, so this allows for a more flexible policy. This allows us to seal the LUKS key once, but still update the PCR values that it is sealed against, since we can pass an updated second policy to the TPM when we update the BIOS or the Bootloader, among others.
+
+#### How to interact with the TPM
+To interact with the TPM, there is a set of open source linux user-space tools developed by Intel that are available in the official Arch repositories called `tpm2-tools`. It is a collection of command line programs to interact with the TPM via the `tpm2-tss` library to talk to the TPM, as well as the optional but strongly recommended `tpm2-abrmd` for access and resource management. Your best resource for these tools are the [manpages](https://github.com/tpm2-software/tpm2-tools/tree/master/man) in the git repo (or you can use `# man <tool>` but you have to know the name of the tool first). Anywhere you see a commandline tool used in this guide that starts with `tpm2_` in this guide, you can find that tool in `tpm2-tools`  
+
+The version of `tpm2-tools` used to write this guide was `4.1.1`, however note that the manpages link is for the master branch. These tools are under continuous development and they have been known to change quite significatly between versions so take notice of which version you have, and select the appropriate release tag before reading any of the manpages.  
+
+The `tpm2-tss` library is an implementation of the TCG's "TPM Software Stack" as specified in the TPM2 Library Specification linked to previously. This is an open source implemenation developed by Intel along side `tpm2-tools`. There is also a "competing" software stack by IBM (also open source), however I do not beleive the tools are compatible with it.
+
+`tpm2-abrmd` is a user space TPM Access Broker and Resource Management Daemon. It does exactly what it says on the tin.  While it is true that the tools/tss can just access the TPM directly (the kernel makes it available as `/dev/tpm0`), this daemon allows for multiple programs to use the TPM at the same time without colliding. It also helps with certain commands by acting as buffer when we want to send the TPM more data than it can't otherwise handle all at once, which is more common that you think (TPM's have a very small minimum buffer size and most vendors don't bother to make it bigger).
 
 ## Installing Arch Linux on an Encrypted Disk alongside Windows with Bitlocker
 This guide wasn't initially going to include Arch Installation steps, but it is easiest to set all this up while doing a fresh install. Only steps that are not part of a typical install will be covered in detail. Everything else will be listed in brief only. See the [Official Install Guide](https://wiki.archlinux.org/index.php/Installation_guide) for details. Further, these steps will only install the bare minimum needed to boot Arch and do everything outlined in this guide.
@@ -88,7 +99,7 @@ To do this, we will first create a 100mb ramfs to work in, so that the key is ne
 ```
 You want to use ramfs rather than tmpfs because tmpfs can be swapped to the disk, while ramfs cannot. Further details on this are left to the reader.   
 
-Then we will use `tpm2_getrandom` to generate 256 random bits as the key:
+Then we will use `tpm2_getrandom` from `tpm2_tools` to generate 256 random bits as the key:
 ```
 # tpm2_getrandom 32 > /path/to/your/chosen/mountpoint/mk.bin
 ```
@@ -111,7 +122,7 @@ Assuming that your drive is already partitioned the way you want, the following 
 `--verbose` enables verbose mode.  
 `--iter-time 10000` this manually sets the keyslot iteration time to 10 seconds.  
 >Note on Iteration Time  
-A keyslot iteration time of 10 seconds means that it will take 10 seconds (based on the speed of your current cpu) to unlock the drive using the passphrase. This is to compensate for a possibly weak passphrase and make it costly for an attacker to brute-force or dictionary attack it because it requires 10 seconds per attempt. The LUKS default is 1 second, in order to balance security and convenience. If you are confident in your passphrase you can choose to omit this and use the default (or set it to another value of your choice). For the configuration shown in this guide, the passphrase set here is considered a backup or fallback, and will not be used very often; thus making the 10 second wait time a nice feature that won't typically add to your boot time. Later we will be setting another passphrase that keeps the default 1 second, and is sealed into the TPM for automated unlocking on boot. Under most circumstances this second passphrase is the one that will be used, and it will be a randomly generated with the TPM's hardware random number generator to ensure that it has the highest possible entropy.  
+A keyslot iteration time of 10 seconds means that it will take 10 seconds (based on the speed of your current cpu) to unlock the drive using the passphrase. This is to compensate for a possibly weak passphrase and make it costly for an attacker to brute-force or dictionary attack it because it requires 10 seconds per attempt. The LUKS default is 1 second, in order to balance security and convenience. If you are confident in your passphrase you can choose to omit this and use the default (or set it to another value of your choice). For the configuration shown in this guide, the passphrase set here is considered a backup or fallback, and will not be used very often; thus making the 10 second wait time a nice feature that won't typically add to your boot time. Later we will be setting another passphrase that keeps the default 1 second, and is sealed into the TPM for automated unlocking on boot. Under most circumstances this second passphrase is the one that will be used, and it will be a randomly generated with the TPM's hardware random number generator to ensure that it would be impractical to brute force.  
 
 There are a number of other options available surrounding how keys are generated, among other things, but in general the defaults will be more than enough for you unless you are using an older/less powerful computer or have specific requirements such as using something stronger than AES128 (With a keysize of 256 bits, aes-xts works out to AES128 level security).  
 `cryptsetup --help` outputs the defaults that were compiled into your version of the tool. Mine for LUKS are `cipher: aes-xts-plain64, key size: 256 bits, passphrase hashing: sha256, RNG: /dev/urandom`.  
@@ -148,7 +159,7 @@ Before you go putting your important data on your encrypted LUKS partition, you 
 # cryptsetup luksHeaderBackup /dev/sda5 --header-backup-file my_luks_header
 ```
 This command does exactly what it says it does, so an explanation of the arguments is probably not needed here. Just make sure you put this file somewhere safe. Ideally on another drive somewhere.  
-See the `cryptsetup` manpage for relevant warnings about header backups. In brief, there are none unless you change your passphrase. If you do, you have to make a new backup, or separately edit the backup, as someone with the backed up header could unlock your partition with the old passphrase otherwise.  
+See the `cryptsetup` manpage for relevant warnings about header backups. In brief, there are none unless you change your passphrase. If you do, you have to make a new backup, or separately edit the backup, as someone with the backed up header could unlock your partition with the old passphrase otherwise. The header cannot decrypt anything without knowledge of the passphrase(s).  
 For more information on backups, see the `cryptsetup` FAQ, section 6
 
 ### Install Basic Arch System
@@ -164,9 +175,9 @@ You will then have to open the file and remove the `#` from each mirror to activ
 #### Packages
 Run this command to install all the basic packages you will need for this guide (plus one or two useful utilities that you will probably just install later anyway):
 ```
-# pacstrap /mnt base linux linux-firmware vim sudo man-db man-pages texinfo rng-tools cryptsetup efitools sbsigntools parted ntp grub efibootmgr tpm2-tools tpm2-tss-engine
+# pacstrap /mnt base linux linux-firmware vim sudo man-db man-pages texinfo openssl cryptsetup efitools sbsigntools grub efibootmgr tpm2-tools tpm2-abrmd tpm2-tss-engine
 ```
-If you prefer the packages listed on separate lines (eaiser to read), here they are, in no particular order:
+If you prefer the packages listed on separate lines, here they are, in no particular order:
 ```
 base
 linux
@@ -176,17 +187,17 @@ sudo
 man-db
 man-pages
 texinfo
-rng-tools
+openssl
 cryptsetup
 efitools
 sbsigntools
-parted
-ntp
 grub
 efibootmgr
 tpm2-tools
+tpm2-abrmd
 tpm2-tss-engine
 ```
+This package set will get you booting and doing everthing in this guide, but not a whole lot else. If you know what other packages you want, install them now (in particular, make sure you install something to allow you connect to a network or you'll have to boot the live disk again just to install more packages later)
 
 #### Genfstab
 Mount your efi partition at `/mnt/efi`. You will have to create that directory first.  
@@ -230,31 +241,70 @@ Don't forget to set your root password! Make sure it's a good one!
 We won't cover creating any users here as it's not needed for a barebones bootable system. Technically the root password isn't either, but if you forget that leaves your system wide open.  
 Just call `passwd` to set it, since you are already the root user.
 
-### Unlocking LUKS with TPM 2.0
+#### Enable tpm2-abrmd service
+We installed and started this daemon on the live disk way back at the beginning of the guide. Enabling it now inside the chroot means systemd will automatically start it when we boot into our new system. 
+```
+systemctl enable tpm2-abrmd
+```
+
+### Unlocking LUKS Automatically with TPM 2.0
 
 #### Mount a Ramfs as a working directory
-It's always a good idea to use a ramfs when generating keys. Refer above in the optional section about generating a master key to see how to mount a ramfs, or use the same one if you didn't unmount it.
+It's always a good idea to use a ramfs when generating keys. Refer above in the optional section about generating a master key to see how to mount a ramfs, or use the same one if you didn't unmount it. The following sections assume this ramfs as your working directory.
 
 #### Sealing your LUKS passphrase with the TPM
 
 ##### Generate a primary key
 The primary key sits at the top of the TPM hierarchy and is used to encrypt it's child keys within the TPM. If the primary is compromised, so is every key under it.  
-With that in mind, the best way to ensure nobody else can access and use your primary key is to not store anywhere. How does that work? Primary keys are derived from the Heirachy Primary Seed (in this case, the Owner Primary Seed). The derivation function is deterministic. Given the same seed and the same key template, it can regenerate the same key every time. This means that the only thing we need to do is make sure our template is unique. We can do this by supplying some unique data only known to us during the creation of the primary key. This is sort of like generating the key with two seeds.  
-To generate the unique data, you can use the TPM's TRNG, or some other source of entropy of your choice.
-```
-# tpm2_creatprimary --heirachy=o --key-auth=someprivatekey --key-context=somecontextfilepath
-```
-Being explicit - some of these are default
+With that in mind, the best way to ensure nobody else can access and use your primary key is to not store it anywhere. How does that work? Primary keys are derived from the Heirachy Primary Seed (in this case, the Owner Primary Seed). The derivation function is deterministic. Given the same seed and the same key template, it can regenerate the same key every time. This means that the only thing we need to do is make sure our template is unique. We can do this by supplying some unique data only known to us during the creation of the primary key. This is sort of like generating the key with two seeds. We can then store the unique data in a secure location (such as a LUKS encrypted USB Flash Drive) so that only someone with access to that unique data can re-generate the primary key. **This unique data should be given the same care as a private key.**  
+To generate the unique data, you can use the TPM's TRNG, or some other source of entropy of your choice. 
 
-Create Wilcard Polcy for Key.
+Generate the unique data with the TPM:
 ```
+# tpm2_getrandom 32 > pkseed.bin
+```
+Generate the primary key with the unique data:
+```
+# tpm2_creatprimary --unique-data pkseed.bin --key-context pkcontext.ctx
+```
+`--key-context pkcontext.ctx` saves the key's context to a file for reference later. This context is only useful so long as the primary key is in the TPM's memory.  
+There are many more options for this command, but in this case we are sticking to the defaults, which I will list below:
+- Heirarchy: Owner
+- Algorithm: `rsa2048:null:aes128cfb`
+  - Many TPMs won't offer much better than this as the spec doesn't require it. Depending on which version of the spec your TPM conforms to, it may also have `aes256` but it is recommended to use algorithms with matching key strengths (`rsa2048`'s 112 bits considered close enough to `aes128`'s 128 bits). `rsa16384` would be required for 256 bit key strength to match `aes256`.
+- Hash Algorithm: `sha256`
+- Attributes: `restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda`
+- Authorization Key: null/empty password. This is ok because we aren't storing the key in the TPM, so the only want to get access to it, is to regenerate it with the unique data (which acts like sort of like an authorization key), and the seed from the Owner Hierarchy.
+- Authorization Policy: also null. See above.
 
+##### Generate the new LUKS passphrase just for the TPM
+Next we need to create a new LUKS passphrase to use with the TPM. If you set the iteration time on your previous passphrase to 10 seconds, this is especially important to make sure your "normal" boot times are short.  
+Again we can use the TPM's TRNG to generate a random key:
 ```
+# tpm2_getRandom 32 > passphrase.bin
+```
+And then we can use the `cryptsetup`'s `luksAddKey` command:
+```
+# cryptsetup luksAddKey /dev/sda5 passphrase.bin
+```
+This command is pretty self explanitory. It will prompt you for your previous passphrase before adding the new key in keyslot 2 (A LUKS device can have up to 10 passphrases).
 
-Create a key under a the new primary key.
+##### Create a flexible policy
+Before we seal this new passphrase into the TPM under our primary key, we need to create a policy to seal it with, so that it can only be accessed if the policy is satisfied. Normally such a policy would involve the values of PCRs that are known to contain measurements of a trusted boot configuration (such as the new arch install we just created), however PCR values are inherently brittle. Whenver you update your bootloader, kernel, or BIOS, the PCR values will change. We would then have to re-seal the passphrase because an object's policy is immutable after it is created. To mitigate this issue, there is a special kind of policy that we can seal our pasphrase with called a wildcard policy. This is a policy that can only be satisfied by another policy that has been signed by an authorization key (and that policy must also be satisfied however it requires). This second policy is passed in at the time the object is to be used (when our passphrase is to be unsealed and used to unlock the disk),  
+Create Wilcard Policy for sealed object:
 ```
-tpm2_create --parent-context=somecontextfilepath --parent-auth=someprivatekey --hash-algorithm=sha256 --key-algorithm=rsa --attributes=someattributes --sealing-input=alukspassphrase --policy=awildcardpolicyfile --key-context=somekeycontextfilepath
+# tpm2_createpolicy
 ```
+##### Seal the LUKS passphrase with a new object under the primary key
+Create a sealed object under the new primary key.
+```
+tpm2_create --parent-context=somecontextfilepath --parent-auth=someprivatekey --hash-algorithm=sha256 --key-algorithm=rsa --attributes=someattributes --sealing-input=passphrase.bin --policy=awildcardpolicyfile --key-context=somekeycontextfilepath
+```
+##### Store the sealed object in the TPM NV Storage
+
+#### Need to reboot to get true PCR values for second policy....
+
+
 
 
 Current plan:
@@ -427,7 +477,7 @@ Basically we are going to create an initramfs that sets the EFI BootNext variabl
 I couldn't find a way to do this directly in GRUB. If you know how, please let me know or submit a PR!
 
 ## Resources
-Most of these resources linked in-line. All of these form the basis for the information contained within this guide, listed in no particular order, but organize by general topic area. I've included links to online man pages and other documentation for most of the tools used.
+Most of these resources linked in-line. All of these form the basis for the information contained within this guide, listed in no particular order, but organized by general topic area. I've included links to online man pages and other documentation for most of the tools used.
 ### TPM Fundamentals
 1. https://link.springer.com/book/10.1007%2F978-1-4302-6584-9
 2. https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/

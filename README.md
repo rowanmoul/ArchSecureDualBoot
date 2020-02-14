@@ -59,7 +59,7 @@ The `tpm2-tss` library is an implementation of the TCG's "TPM Software Stack" as
 
 `tpm2-abrmd` is a user space TPM Access Broker and Resource Management Daemon. It does exactly what it says on the tin.  While it is true that the tools/tss can just access the TPM directly (the kernel makes it available as `/dev/tpm0`), this daemon allows for multiple programs to use the TPM at the same time without colliding. It also helps with certain commands by acting as buffer when we want to send the TPM more data than it can't otherwise handle all at once, which is more common that you think (TPM's have a very small minimum buffer size and most vendors don't bother to make it bigger).
 
-## Installing Arch Linux on an Encrypted Disk alongside Windows with Bitlocker
+## Installing Arch Linux on an Encrypted Disk// alongside Windows with Bitlocker
 This guide wasn't initially going to include Arch Installation steps, but it is easiest to set all this up while doing a fresh install. Only steps that are not part of a typical install will be covered in detail. Everything else will be listed in brief only. See the [Official Install Guide](https://wiki.archlinux.org/index.php/Installation_guide) for details. Further, these steps will only install the bare minimum needed to boot Arch and do everything outlined in this guide.
 
 ### Pre Installation
@@ -217,7 +217,7 @@ At this point we will [chroot](https://wiki.archlinux.org/index.php/Chroot) into
 # arch-chroot /mnt
 ```
 
-#### From this point on, all sections assume you are inside the chroot, and file paths will be written accordingly!!
+#### From this point on, it is assumed you are inside the chroot, and file paths will be written accordingly!!
 
 #### Timezone, Localization, and Network
 See [Timezone](https://wiki.archlinux.org/index.php/Installation_guide#Time_zone), [Localization](https://wiki.archlinux.org/index.php/Installation_guide#Localization), and [Network](https://wiki.archlinux.org/index.php/Installation_guide#Network_configuration)
@@ -247,14 +247,14 @@ We installed and started this daemon on the live disk way back at the beginning 
 systemctl enable tpm2-abrmd
 ```
 
-### Unlocking LUKS Automatically with TPM 2.0
+## Unlocking LUKS Automatically with TPM 2.0
 
-#### Mount a Ramfs as a working directory
+### Mount a Ramfs as a working directory
 It's always a good idea to use a ramfs when generating keys. Refer above in the optional section about generating a master key to see how to mount a ramfs, or use the same one if you didn't unmount it. The following sections assume this ramfs as your working directory.
 
-#### Sealing your LUKS passphrase with the TPM
+### Sealing a LUKS passphrase with the TPM
 
-##### Generate a primary key
+#### Generate a primary key
 The primary key sits at the top of the TPM hierarchy and is used to encrypt it's child keys within the TPM. If the primary is compromised, so is every key under it.  
 With that in mind, the best way to ensure nobody else can access and use your primary key is to not store it anywhere. How does that work? Primary keys are derived from the Heirachy Primary Seed (in this case, the Owner Primary Seed). The derivation function is deterministic. Given the same seed and the same key template, it can regenerate the same key every time. This means that the only thing we need to do is make sure our template is unique. We can do this by supplying some unique data only known to us during the creation of the primary key. This is sort of like generating the key with two seeds. We can then store the unique data in a secure location (such as a LUKS encrypted USB Flash Drive) so that only someone with access to that unique data can re-generate the primary key. **This unique data should be given the same care as a private key.**  
 To generate the unique data, you can use the TPM's TRNG, or some other source of entropy of your choice. 
@@ -262,7 +262,13 @@ To generate the unique data, you can use the TPM's TRNG, or some other source of
 Generate the unique data with the TPM:
 ```
 # tpm2_getrandom 32 > pkseed.bin
+# printf `\x20\x00` > pkseedsize.bin
+# cat pkseedsize.bin pkseed.bin > pkunique.dat
 ```
+This will generate 32 random bytes with the TRNG, then create a 2-btye header to indicate the amount of data (32 bytes). This header is a UINT16 in little-endian byte order, which is why it is 0x2000, not 0x0020. Note that `printf`'s `\x` escape sequence only works for one byte, so we need it twice. `cat` is then used to contactenate the two parts into a single file.
+You only need to store `pkunique.dat` somewhere safe. Also note that the file extensions are not required.
+
+
 Generate the primary key with the unique data:
 ```
 # tpm2_creatprimary --unique-data pkseed.bin --key-context pkcontext.ctx
@@ -277,7 +283,7 @@ There are many more options for this command, but in this case we are sticking t
 - Authorization Key: null/empty password. This is ok because we aren't storing the key in the TPM, so the only want to get access to it, is to regenerate it with the unique data (which acts like sort of like an authorization key), and the seed from the Owner Hierarchy.
 - Authorization Policy: also null. See above.
 
-##### Generate the new LUKS passphrase just for the TPM
+#### Generate the new LUKS passphrase just for the TPM
 Next we need to create a new LUKS passphrase to use with the TPM. If you set the iteration time on your previous passphrase to 10 seconds, this is especially important to make sure your "normal" boot times are short.  
 Again we can use the TPM's TRNG to generate a random key:
 ```
@@ -289,20 +295,22 @@ And then we can use the `cryptsetup`'s `luksAddKey` command:
 ```
 This command is pretty self explanitory. It will prompt you for your previous passphrase before adding the new key in keyslot 2 (A LUKS device can have up to 10 passphrases).
 
-##### Create a flexible policy
-Before we seal this new passphrase into the TPM under our primary key, we need to create a policy to seal it with, so that it can only be accessed if the policy is satisfied. Normally such a policy would involve the values of PCRs that are known to contain measurements of a trusted boot configuration (such as the new arch install we just created), however PCR values are inherently brittle. Whenver you update your bootloader, kernel, or BIOS, the PCR values will change. We would then have to re-seal the passphrase because an object's policy is immutable after it is created. To mitigate this issue, there is a special kind of policy that we can seal our pasphrase with called a wildcard policy. This is a policy that can only be satisfied by another policy that has been signed by an authorization key (and that policy must also be satisfied however it requires). This second policy is passed in at the time the object is to be used (when our passphrase is to be unsealed and used to unlock the disk),  
-Create Wilcard Policy for sealed object:
+#### Create a flexible policy
+Before we seal this new passphrase into the TPM under our primary key, we need to create a policy to seal it with, so that it can only be accessed if the policy is satisfied. Normally such a policy would involve the values of PCRs that are known to contain measurements of a trusted boot configuration (such as the new arch install we just created), however PCR values are inherently brittle. Whenver you update your bootloader, kernel, or BIOS, the PCR values will change. We would then have to re-seal the passphrase because an object's policy is immutable after it is created. To mitigate this issue, there is a special kind of policy that we can seal our pasphrase with called a wildcard policy. This is a policy that can only be satisfied by another policy that has been signed by an authorization key (and that policy must also be satisfied however it requires). This second policy is passed in at the time the sealing object is to be used (when our passphrase is to be unsealed and used to unlock the disk),  
+Create Wilcard Policy for sealing object:
 ```
-# tpm2_createpolicy
+# tpm2_create 
+# tpm2_startauthsession --policy-session -g sha256 -c pkcontext.ctx -S policysession.plss
+
 ```
-##### Seal the LUKS passphrase with a new object under the primary key
-Create a sealed object under the new primary key.
+#### Seal the LUKS passphrase with a new sealing object under the primary key
+Create a sealing object under the new primary key.
 ```
 tpm2_create --parent-context=somecontextfilepath --parent-auth=someprivatekey --hash-algorithm=sha256 --key-algorithm=rsa --attributes=someattributes --sealing-input=passphrase.bin --policy=awildcardpolicyfile --key-context=somekeycontextfilepath
 ```
-##### Store the sealed object in the TPM NV Storage
+#### Store the sealing object in the TPM NV Storage
 
-#### Need to reboot to get true PCR values for second policy....
+### Need to reboot to get true PCR values for second policy....
 
 
 
@@ -319,11 +327,11 @@ Initramfs script will check for:
 
 Actual unlocking will be done via the regular `encrypt` hook, with the TPM unlock hook running first and creating a keyfile for the `encrypt` hook to read. Optional Re-seal will be handled by another hook that runs after the `encrypt` hook has unlocked the drive (since it needs the key in the drive to update the TPM policy.)
 
-#### Unsealing your LUKS passphrase with the TPM automatically in initramfs
+### Unsealing your LUKS passphrase with the TPM automatically in initramfs
 
 Initramfs Magic
 
-#### Updating TPM seal on system update
+### Updating TPM seal on system update
 Pacman hooks!
 
 ## Configuring Secure Boot

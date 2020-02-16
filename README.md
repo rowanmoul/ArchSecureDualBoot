@@ -84,14 +84,12 @@ We will be using this example partition map in the below commands. **Make sure y
 The next step is to set up disk encryption for your Linux partition. This will not be true full disk encryption because we will only be encrypting the Linux partition, but since our windows partition is encrypted with BitLocker, nearly the whole drive ends up being encrypted, just with different keys. We will not be encrypting the efi system partition, instead relying on secure boot signing and PCR measurements to prevent tampering. If you want an encrypted efi partition that is beyond the scope of this guide, but there are guides available that can help with this.  
 For the purposes of this guide, we will only be encrpyting a single partition, with the assumption that your entire Linux system is on that partion, rather than having separate partitions for directories like `/home` which aren't necessary in most single-user cases.
 
-#### dm-crypt and LUKS
+#### `dm-crypt`, LUKS, and `cryptsetup`
 `dm-crypt` is a Linux kernel module that is part of the kernel device mapper framework. If you are framiliar with LVM or software RAID, it uses the same base kernel functionality with the addition of encryption. `dm-crypt` supports multiple disk encrpytion methods and can even be stacked with LVM and/or RAID.  
-Here we will be using LUKS encryption of a single volume mapped to a single real disk partition. LUKS stands for Linux Unified Key Setup and is the de facto standard for disk encryption on Linux, providing a consistent transferable system across distributions. For more information on LUKS and how it works, there are some great explanations at the [official project repository](https://gitlab.com/cryptsetup/cryptsetup).
-
-#### Creating a LUKS encrypted Volume with `cryptsetup`
+Here we will be using LUKS encryption of a single volume mapped to a single real disk partition. LUKS stands for Linux Unified Key Setup and is the de facto standard for disk encryption on Linux, providing a consistent transferable system across distributions. For more information on LUKS and how it works, there are some great explanations at the [official project repository](https://gitlab.com/cryptsetup/cryptsetup).  
 To help set everything up, we will use `cryptsetup`, which is the most commonly used cli for `dm-crypt` based disk encryption, as well as the reference implementation for LUKS. The version used to make this guide was 2.2.2  
 
-##### Generating the LUKS MasterKey with the TPM (Optional)
+#### Generating the LUKS MasterKey with the TPM (Optional)
 The TPM has a built in [TRNG](https://en.wikipedia.org/wiki/Hardware_random_number_generator) that is potentially a better source of entropy than `/dev/random` and `/dev/urandom`. This is not to say that either of those are bad. In most cases they are actually very good sources of entropy! I'm not going to get into why you would want to use one or the other. That is left to you to research and determine. If you want, you can generate your LUKS master key with the TPM rather than `cryptsetup`'s default of `/dev/urandom`.  
 To do this, we will first create a 100mb ramfs to work in, so that the key is never saved to a disk in the clear:
 ```
@@ -110,7 +108,7 @@ Feed that into the command in the next section by adding the following flag:
 --master-key-file /path/to/your/chosen/mountpoint/mk.bin
 ```
 
-##### Format the partition
+#### Format the partition
 
 Assuming that your drive is already partitioned the way you want, the following command will format the given partition as a LUKS partition:
 ```
@@ -122,13 +120,13 @@ Assuming that your drive is already partitioned the way you want, the following 
 `--verbose` enables verbose mode.  
 `--iter-time 10000` this manually sets the keyslot iteration time to 10 seconds.  
 >Note on Iteration Time  
-A keyslot iteration time of 10 seconds means that it will take 10 seconds (based on the speed of your current cpu) to unlock the drive using the passphrase. This is to compensate for a possibly weak passphrase and make it costly for an attacker to brute-force or dictionary attack it because it requires 10 seconds per attempt. The LUKS default is 1 second, in order to balance security and convenience. If you are confident in your passphrase you can choose to omit this and use the default (or set it to another value of your choice). For the configuration shown in this guide, the passphrase set here is considered a backup or fallback, and will not be used very often; thus making the 10 second wait time a nice feature that won't typically add to your boot time. Later we will be setting another passphrase that keeps the default 1 second, and is sealed into the TPM for automated unlocking on boot. Under most circumstances this second passphrase is the one that will be used, and it will be a randomly generated with the TPM's hardware random number generator to ensure that it would be impractical to brute force.  
+A keyslot iteration time of 10 seconds means that it will take 10 seconds (based on the speed of your current cpu) to unlock the drive using the passphrase. This is to compensate for a possibly weak passphrase and make it costly for an attacker to brute-force or dictionary attack it because it requires 10 seconds per attempt. The LUKS default is 1 second, in order to balance security and convenience. If you are confident in your passphrase you can choose to omit this and use the default (or set it to another value of your choice). For the configuration shown in this guide, the passphrase set here is considered a backup or fallback, and will not be used very often; thus making the 10 second wait time a nice feature that won't typically add to your boot time. Later we will be setting another passphrase that keeps the default 1 second, and is sealed into the TPM for automated unlocking on boot. Under most circumstances this second passphrase is the one that will be used, and it will be a randomly generated with the TPM's hardware random number generator to ensure that it would be impractical to brute force.
 
 There are a number of other options available surrounding how keys are generated, among other things, but in general the defaults will be more than enough for you unless you are using an older/less powerful computer or have specific requirements such as using something stronger than AES128 (With a keysize of 256 bits, aes-xts works out to AES128 level security).  
 `cryptsetup --help` outputs the defaults that were compiled into your version of the tool. Mine for LUKS are `cipher: aes-xts-plain64, key size: 256 bits, passphrase hashing: sha256, RNG: /dev/urandom`.  
 Do your own reading to determine which other settings you might want. The `cryptsetup` [FAQ](https://gitlab.com/cryptsetup/cryptsetup/-/wikis/FrequentlyAskedQuestions#2-setup) and [manpage](https://manpages.debian.org/unstable/cryptsetup-bin/cryptsetup.8.en.html) contain a wealth of information.
 
-##### Open the LUKS partition
+#### Open the LUKS partition
 
 After formatting the partition, we want to open it so that we can create the filesystem and mount it for writing. To open our encrpyted LUKS partition, we use the following command:
 ```
@@ -139,7 +137,7 @@ After formatting the partition, we want to open it so that we can create the fil
 `cryptroot` is the name we want to map the LUKS device to. This can be any name you want. It will be made available at `/dev/mapper/cryptroot` (or whatever name you gave it).  
 Running the command as above will prompt you for your passphrase, after which the LUKS device will be mapped as specified.
 
-##### Create the filesystem and mount it
+#### Create the filesystem and mount it
 This part happens exactly like it would for a regular partition, except you are pointing at a different device in `/dev`
 ```
 # mkfs.ext4 /dev/mapper/cryptroot
@@ -252,39 +250,38 @@ systemctl enable tpm2-abrmd
 ### Mount a Ramfs as a working directory
 It's always a good idea to use a ramfs when generating keys. Refer above in the optional section about generating a master key to see how to mount a ramfs, or use the same one if you didn't unmount it. The following sections assume this ramfs as your working directory.
 
-### Sealing a LUKS passphrase with the TPM
-
-#### Generate a primary key
-The primary key sits at the top of the TPM hierarchy and is used to encrypt it's child keys within the TPM. If the primary is compromised, so is every key under it.  
-With that in mind, the best way to ensure nobody else can access and use your primary key is to not store it anywhere. How does that work? Primary keys are derived from the Heirachy Primary Seed (in this case, the Owner Primary Seed). The derivation function is deterministic. Given the same seed and the same key template, it can regenerate the same key every time. This means that the only thing we need to do is make sure our template is unique. We can do this by supplying some unique data only known to us during the creation of the primary key. This is sort of like generating the key with two seeds. We can then store the unique data in a secure location (such as a LUKS encrypted USB Flash Drive) so that only someone with access to that unique data can re-generate the primary key. **This unique data should be given the same care as a private key.**  
+### Generate a primary key
+Primary keys sit at the top of a TPM hierarchy and are used to encrypt their child keys within the TPM. If a primary is compromised, so is every key under it.  
+With that in mind, the best way to ensure nobody else can access and use your primary key is to not store it anywhere. How does that work? Primary keys are derived from the Heirachy Primary Seed (in this case, the Owner Hierachy Primary Seed). The derivation function is deterministic. Given the same seed and the same key template, it can regenerate the same key every time. This means that the only thing we need to do is make sure our template is unique. We can do this by supplying some unique data only known to us during the creation of the primary key. This is sort of like generating the key with two seeds. We can then store the unique data in a secure location (such as a LUKS encrypted USB Flash Drive) so that only someone with access to that unique data and the heirachy seed in *this* TPM can re-generate the primary key. If the heriarchy seed is reset, we will not be able to re-generate the key, however all the data we will be encrypting with it is replaceable since we have the original LUKS passphrase as backup, so this is not a concern. **That said, the unique data should be given the same care in storage as a private key.**  
 To generate the unique data, you can use the TPM's TRNG, or some other source of entropy of your choice. 
 
-Generate the unique data with the TPM:
+#### Generate the unique data with the TPM:
 ```
 # tpm2_getrandom 32 > pkseed.bin
 # printf `\x20\x00` > pkseedsize.bin
 # cat pkseedsize.bin pkseed.bin > pkunique.dat
 ```
-This will generate 32 random bytes with the TRNG, then create a 2-btye header to indicate the amount of data (32 bytes). This header is a UINT16 in little-endian byte order, which is why it is 0x2000, not 0x0020. Note that `printf`'s `\x` escape sequence only works for one byte, so we need it twice. `cat` is then used to contactenate the two parts into a single file.
-You only need to store `pkunique.dat` somewhere safe. Also note that the file extensions are not required.
+This will generate 32 random bytes with the TRNG, then create a 2-btye header to indicate the amount of data (32 bytes). This header is a UINT16 in little-endian byte order, which is why it is 0x2000, not 0x0020. Note that `printf`'s `\x` escape sequence only works for one byte, so we need it twice. `\x2000` will yield 3 bytes.
+`cat` is then used to contactenate the two parts into a single file.
+You only need to store `pkunique.dat` somewhere safe. The file extensions are not required for any purpose other than readability.  
+Also note that this format for the unique data is specific to RSA primary keys (as in the default used below). For other types of primary keys, a different format is needed. Refer to the TPM Library Specification Part 2: Structures and search for TPMU_PUBLIC_ID.
 
-
-Generate the primary key with the unique data:
+#### Generate the primary key with the unique data:
 ```
-# tpm2_creatprimary --unique-data pkseed.bin --key-context pkcontext.ctx
+# tpm2_creatprimary --unique-data pkunique.dat --key-context pkcontext.ctx
 ```
-`--key-context pkcontext.ctx` saves the key's context to a file for reference later. This context is only useful so long as the primary key is in the TPM's memory.  
-There are many more options for this command, but in this case we are sticking to the defaults, which I will list below:
+`--key-context pkcontext.ctx` saves the key's context to a file for reference later. This context is useful so long as the primary key is in the TPM's memory, in order to more easily reference it in subsequent commands but has no other purpose.  
+There are many more options for this command, but in this case we are sticking to the defaults as they are the most compatible. I will list them below without much additional detail (see the manpage).
 - Heirarchy: Owner
 - Algorithm: `rsa2048:null:aes128cfb`
   - Many TPMs won't offer much better than this as the spec doesn't require it. Depending on which version of the spec your TPM conforms to, it may also have `aes256` but it is recommended to use algorithms with matching key strengths (`rsa2048`'s 112 bits considered close enough to `aes128`'s 128 bits). `rsa16384` would be required for 256 bit key strength to match `aes256`.
 - Hash Algorithm: `sha256`
 - Attributes: `restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda`
-- Authorization Key: null/empty password. This is ok because we aren't storing the key in the TPM, so the only want to get access to it, is to regenerate it with the unique data (which acts like sort of like an authorization key), and the seed from the Owner Hierarchy.
+- Authorization Key: null/empty password. This is ok because we aren't storing the key in the TPM, so the only way to get access to it, is to regenerate it with the unique data (which acts sort of like an authorization key), and the seed from the Owner Hierarchy.
 - Authorization Policy: also null. See above.
 
-#### Generate the new LUKS passphrase just for the TPM
-Next we need to create a new LUKS passphrase to use with the TPM. If you set the iteration time on your previous passphrase to 10 seconds, this is especially important to make sure your "normal" boot times are short.  
+### Generate the new LUKS passphrase just for the TPM
+Next we need to create a new LUKS passphrase to use with the TPM. If you set the iteration time on your previous passphrase to 10 seconds, this is especially important to make sure your "normal" boot times are of a reasonable length.  
 Again we can use the TPM's TRNG to generate a random key:
 ```
 # tpm2_getRandom 32 > passphrase.bin
@@ -293,17 +290,21 @@ And then we can use the `cryptsetup`'s `luksAddKey` command:
 ```
 # cryptsetup luksAddKey /dev/sda5 passphrase.bin
 ```
-This command is pretty self explanitory. It will prompt you for your previous passphrase before adding the new key in keyslot 2 (A LUKS device can have up to 10 passphrases).
+This command is pretty self explanitory. The first positional argument is our LUKS device, and the second is a file containing the passphrase to add. It will prompt you for your previous passphrase before adding the new key in keyslot 2 (A LUKS device can have up to 10 passphrases).
 
-#### Create a flexible policy
-Before we seal this new passphrase into the TPM under our primary key, we need to create a policy to seal it with, so that it can only be accessed if the policy is satisfied. Normally such a policy would involve the values of PCRs that are known to contain measurements of a trusted boot configuration (such as the new arch install we just created), however PCR values are inherently brittle. Whenver you update your bootloader, kernel, or BIOS, the PCR values will change. We would then have to re-seal the passphrase because an object's policy is immutable after it is created. To mitigate this issue, there is a special kind of policy that we can seal our pasphrase with called a wildcard policy. This is a policy that can only be satisfied by another policy that has been signed by an authorization key (and that policy must also be satisfied however it requires). This second policy is passed in at the time the sealing object is to be used (when our passphrase is to be unsealed and used to unlock the disk),  
-Create Wilcard Policy for sealing object:
+### Create a policy to seal the passphrase with
+Before we seal this new passphrase into a TPM object under our primary key, we need to create a policy to seal it with, so that it can only be accessed if the policy is satisfied. Normally such a policy would involve the values of PCRs that are known to contain measurements of a trusted boot configuration (such as the new arch install we just created), however PCR values are inherently brittle. Whenver you update your bootloader, kernel, BIOS or other values that get measured, the PCR values will change. We would then have to re-seal the passphrase because an object's policy is immutable after it is created. To mitigate this issue, there is a special kind of policy that we can seal our pasphrase with that is coloquially referred to as a "wildcard policy". This is a policy that can only be satisfied by another policy that has been signed by an authorization key (and that policy must also be satisfied however it requires). This second policy is passed in at the time the object with the wildcard policy is to be used (when our passphrase is to be unsealed and used to unlock the disk),  
+
+#### Create a policy signing key for the policy
+
+#### Store the policy signing key and it's authorization key in the TPM 
+
+#### Create Wilcard Policy with the authoriztion key
 ```
-# tpm2_create 
-# tpm2_startauthsession --policy-session -g sha256 -c pkcontext.ctx -S policysession.plss
+# tpm2_startauthsession --policy-session -g sha256 -c pkcontext.ctx -S sealpolicy.session
 
 ```
-#### Seal the LUKS passphrase with a new sealing object under the primary key
+### Seal the LUKS passphrase with a new sealing object under the primary key
 Create a sealing object under the new primary key.
 ```
 tpm2_create --parent-context=somecontextfilepath --parent-auth=someprivatekey --hash-algorithm=sha256 --key-algorithm=rsa --attributes=someattributes --sealing-input=passphrase.bin --policy=awildcardpolicyfile --key-context=somekeycontextfilepath

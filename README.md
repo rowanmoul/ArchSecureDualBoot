@@ -114,16 +114,18 @@ Assuming that your drive is already partitioned the way you want, the following 
 ```
 # cryptsetup luksFormat /dev/sda5 --verify-passphrase --verbose --iter-time 10000
 ```
-`luksFormat` tells `cryptsetup` to format the given device as a LUKS device.  
-`/dev/sda5` the device to format as a LUKS device.  
-`--verify-passphrase` requires the passcode to unlock the LUKS partition to be entered twice, similar to other "comfirm your password" mechanisms.  
-`--verbose` enables verbose mode.  
-`--iter-time 10000` this manually sets the keyslot iteration time to 10 seconds.  
->Note on Iteration Time  
-A keyslot iteration time of 10 seconds means that it will take 10 seconds (based on the speed of your current cpu) to unlock the drive using the passphrase. This is to compensate for a possibly weak passphrase and make it costly for an attacker to brute-force or dictionary attack it because it requires 10 seconds per attempt. The LUKS default is 1 second, in order to balance security and convenience. If you are confident in your passphrase you can choose to omit this and use the default (or set it to another value of your choice). For the configuration shown in this guide, the passphrase set here is considered a backup or fallback, and will not be used very often; thus making the 10 second wait time a nice feature that won't typically add to your boot time. Later we will be setting another passphrase that keeps the default 1 second, and is sealed into the TPM for automated unlocking on boot. Under most circumstances this second passphrase is the one that will be used, and it will be a randomly generated with the TPM's hardware random number generator to ensure that it would be impractical to brute force.
+- `luksFormat` tells `cryptsetup` to format the given device as a LUKS device.  
+- `/dev/sda5` is the device to format as a LUKS device.  
+- `--verify-passphrase`
+  - requires the passcode to unlock the LUKS partition to be entered twice, similar to other "comfirm your password" mechanisms.  
+- `--verbose` enables verbose mode.  
+- `--iter-time 10000` this manually sets the keyslot iteration time to 10 seconds.  
+  - A keyslot iteration time of 10 seconds means that it will take 10 seconds (based on the speed of your current cpu) to unlock the drive using the passphrase. This is to compensate for a possibly weak passphrase and make it costly for an attacker to brute-force or dictionary attack it because it requires 10 seconds per attempt. The LUKS default is 1 second, in order to balance security and convenience. If you are confident in your passphrase you can choose to omit this and use the default (or set it to another value of your choice). For the configuration shown in this guide, the passphrase set here is considered a backup or fallback, and will not be used very often; thus making the 10 second wait time a nice feature that won't typically add to your boot time. Later we will be setting another passphrase that keeps the default 1 second, and is sealed into the TPM for automated unlocking on boot. Under most circumstances this second passphrase is the one that will be used, and it will be a randomly generated with the TPM's hardware random number generator to ensure that it would be impractical to brute force.
 
 There are a number of other options available surrounding how keys are generated, among other things, but in general the defaults will be more than enough for you unless you are using an older/less powerful computer or have specific requirements such as using something stronger than AES128 (With a keysize of 256 bits, aes in xts mode works out to AES128, as xts operates on a pair of keys).  
-`cryptsetup --help` outputs the defaults that were compiled into your version of the tool. Mine for LUKS are `cipher: aes-xts-plain64, key size: 256 bits, passphrase hashing: sha256, RNG: /dev/urandom`.  
+`cryptsetup --help` outputs the defaults that were compiled into your version of the tool.  
+Mine for LUKS are:  
+`cipher: aes-xts-plain64, key size: 256 bits, passphrase hashing: sha256, RNG: /dev/urandom`.  
 Do your own reading to determine which other settings you might want. The `cryptsetup` [FAQ](https://gitlab.com/cryptsetup/cryptsetup/-/wikis/FrequentlyAskedQuestions#2-setup) and [manpage](https://manpages.debian.org/unstable/cryptsetup-bin/cryptsetup.8.en.html) contain a wealth of information.
 
 #### Open the LUKS partition
@@ -132,9 +134,11 @@ After formatting the partition, we want to open it so that we can create the fil
 ```
 # cryptsetup open /dev/sda5 cryptroot
 ```
-`open` tells `cryptsetup` we want to open a LUKS device.  
-`/dev/sda5` is the LUKS device we want to open.  
-`cryptroot` is the name we want to map the LUKS device to. This can be any name you want. It will be made available at `/dev/mapper/cryptroot` (or whatever name you gave it).  
+- `open` tells `cryptsetup` we want to open a LUKS device.  
+- `/dev/sda5` is the LUKS device we want to open.  
+- `cryptroot` is the name we want to map the LUKS device to.
+  - This can be any name you want. It will be made available at `/dev/mapper/cryptroot` (or whatever name you gave it).  
+
 Running the command as above will prompt you for your passphrase, after which the LUKS device will be mapped as specified.
 
 #### Create the filesystem and mount it
@@ -247,10 +251,11 @@ systemctl enable tpm2-abrmd
 
 ## Unlocking LUKS Automatically with TPM 2.0
 
-> Please note that all file extensions used in this section with `tpm2_` commands are purely for readability.
+> Please note that all file extensions used in this section with `tpm2_*` commands are purely for readability.
 
 ### Mount a Ramfs as a working directory
-It's always a good idea to use a ramfs when generating keys. Refer above in the optional section about generating a master key to see how to mount a ramfs, or use the same one if you didn't unmount it. The following sections assume this ramfs as your working directory.
+It's always a good idea to use a ramfs when generating keys. Refer above in the optional section about generating a master key to see how to mount a ramfs, or use the same one if you didn't unmount it.  
+**The following sections assume this ramfs as your working directory.**
 
 ### Generate a primary key
 Primary keys sit at the top of a TPM hierarchy and are used to encrypt their child keys within the TPM. If a primary is compromised, so is every key under it.  
@@ -272,15 +277,18 @@ Also note that this format for the unique data is specific to RSA primary keys (
 ```
 # tpm2_creatprimary --unique-data primary-key-unique.dat --key-context primary-key.context
 ```
-`--key-context primary-key.context` saves the key's context to a file for reference later. This context is useful so long as the primary key is in the TPM's memory, in order to more easily reference it in subsequent commands but has no other purpose.  
-There are many more options for this command, but in this case we are sticking to the defaults as they are plenty secure and the most compatible. I will list them below without much additional detail (see the manpage for details).
+- `--unique-data primary-key-unique.dat` passes in the unique data that we just generated.
+- `--key-context primary-key.context` saves the key's context to a file for reference later.
+  - This context is useful so long as the primary key is in the TPM's memory, in order to more easily reference it in subsequent commands but has no other purpose.
+
+There are many more options for this command, but in this case we are sticking to the defaults as they are plenty secure and the most compatible. I will list them below without much additional detail (see [the manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_createprimary.1.md) for details).
 - Heirarchy: Owner
 - Algorithm: `rsa2048:null:aes128cfb`
   - Many TPMs won't offer much better than this as the spec doesn't require it. Depending on which version of the spec your TPM conforms to, it may also have `aes256` but it is recommended to use algorithms with matching key strengths (`rsa2048`'s 112 bits considered close enough to `aes128`'s 128 bits). `rsa16384` would be required for 256 bit key strength to match `aes256`.
 - Hash Algorithm: `sha256`
 - Attributes: `restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda`
-- Authorization Key: null/empty password. This is ok because we aren't storing the key in the TPM, so the only way to get access to it, is to regenerate it with the unique data (which acts sort of like an authorization key), and the seed from the Owner Hierarchy.
-- Authorization Policy: also null. See above.
+- Authorization Key: empty password. This is ok because we aren't storing the key in the TPM, so the only way to get access to it, is to regenerate it with the unique data (which acts sort of like an authorization key), and the seed from the Owner Hierarchy.
+- Authorization Policy: null, which means it can never be satisfied.
 
 ### Generate the new LUKS passphrase just for the TPM
 Next we need to create a new LUKS passphrase to use with the TPM. If you set the iteration time on your previous passphrase to 10 seconds, this is especially important to make sure your "normal" boot times are of a reasonable length.  
@@ -302,37 +310,83 @@ In order to create a wildcard policy, we need a key that will be used to sign th
 Similar to previously, the access key will be generated with the TPM:
 ```
 # tpm2_getrandom 32 > policy-authorization-access.bin
-# cp policy-authorization-access.bin /root/policy-authorization-access.bin
-# chmod 400 /root/policy-authorization-access.bin
 ```
-The key is copied to `/root` and given restricted permissions that only allows it to be read by root. It cannot be written by root to prevent accidental overwrite. The root user can explicitly change the permission if needed so this isn't an issue.
+Then we will copy the access key to a restricted folder in `/root` and make it read-only:
+```
+# mkdir /root/keys
+# chmod 600 /root/keys
+# cp policy-authorization-access.bin /root/keys/policy-authorization-access.bin
+# chmod 400 /root/keys/policy-authorization-access.bin
+```
+The key cannot be written to prevent accidental overwrite. The root user can explicitly change the permission if needed so this isn't an issue. The folder is not read-only so that we can add more files to it later.
 
 #### Create an authorization key for the policy
 We will create this key in the TPM and restrict it's access with the key we just created:
 ```
 # tpm2_create --parent-context primary-key.context --auth-key file:policy-authorization-access.bin --key-algorithm rsa2048:rsapss-sha256 --attributes fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign|restricted --key-context policy-authorization-key.context
 ```
+- `--parent-context primary-key.context` encrypts the key under the primary key created previously.  
+- `--auth-key file:policy-authorization-access.bin` sets the authorization value for the new key being created.
+  - Since this value is in a file that we just created, we need to append `file:` to the file path given. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/authorizations.md).  
+- `--key-algorithm rsa2048:rsapss-sha256` sets the key algorithm.
+  - this argument specifically sets it to be an `rsa2048` key with a signing scheme of `rsapss` using `sha256` as the hash algorithm. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/alg.md).  
+- `--attributes fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign|restricted` sets the TPM object attributes for the key.
+  - See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/obj-attrs.md) for details, and note that the attributes here restrict this key to only be a signing key, to only sign TPM generated data (such as policies), and to only be accessible with the auth-key value provided, among a few other things.  
+- `--key-context policy-authorization-key.context` saves the key's context to a file for reference later.
+  - just like with the primary key.
+
+Unlike the primary key, most of the options that have defaults have been specified here in order to create this key just for signing our policies. The only option not specified is the hash algorithm, which is sha256 by default and is not to be confused with the hash algorithm specified as part of the signing scheme above. This is used for a different purpose.
 
 #### Store the policy authorization key in the TPM permanently
+We will be using the policy authorization key every time we unseal the disk (to verify the signature on the signed policy), so it is easiest to store it permanently in the TPM. To do this, we use the `tpm2_evictcontrol` tool. I'm not clear why the tool is called that, but the tool's name matches the internal TPM command's name.
 ```
 # tpm2_evictcontrol --object-context policy-authorization-key.context --output policy-authorization-key.handle
-# cp policy-authorization-key.handle /boot/policy-authorization-key.handle
-# cp policy-authorization-key.handle /root/policy-authorization-key.handle
-# chmod 400 /root/policy-authorization-key.handle
 ```
+- `--object-context policy-authorization-key.context` specifies the object that should be permanently stored in the TPM.
+- `--output policy-authorization-key.handle` saves the interal handle (nvram address) where the object was stored to a file that can later be used to reference that object, like a context file.
+
+Since the key will be needed before unlocking the disk, we copy the handle file to `/boot/tpm2-encrypt` (recall we bind mounted `/boot` to `/efi/EFI/arch`). `tpm2-encrypt` is the name of the `mkinitcpio` hook we will be creating shortly to unlock the disk automatically.  
+We will also copy a backup of the handle file to `/root/keys` and restrict it's access as with the access key.
+```
+# mkdir /boot/tpm2-encrypt
+# cp policy-authorization-key.handle /boot/tpm2-encrypt/policy-authorization-key.handle
+# cp policy-authorization-key.handle /root/keys/policy-authorization-key.handle
+# chmod 400 /root/keys/policy-authorization-key.handle
+```
+Storing the handle file in the clear on the efi partition is not a security issue as it simply refers to the key's location in the TPM nvram. It does *not* provide access to the private area of the key (and the public area is always available anyway, through `tpm2_nvreadpublic` and `tpm2_readpublic`).
 
 #### Get the authorization key's name
+The name of the authorization key (which is a digest that uniquely identifies the key in the TPM) is needed to create the wildcard policy.
 ```
 # tpm2_readpublic --context-object policy-authorization-key.handle --name policy-authorization-key.name
 ```
+- `--context-object policy-authorization-key.handle` specifies the TPM object to read the public area of.
+- `--name policy-authorization-key.name` saves the name portion of the public area to a file.
 
 #### Create Wilcard Policy with the authorization key
+Finally, we can create the wildcard policy! Start by opening a trial authorization session. A trial session is a session that can be used to create a policy digest, but not authorize access to anything. 
 ```
-# tpm2_startauthsession --hash-algorithm sha256 --key-context primary-key.context --session seal-wilcard-policy.session
+# tpm2_startauthsession --hash-algorithm sha256 --session seal-wilcard-policy.session
 ```
+- `--hash-algorithm sha256` specifies the hash algoritm to use for the session (all auth sessions are variations of HMAC sessions).
+- `--session seal-wilcard-policy.session` specifies the file to save the session to.
+
+This tool starts a trial session by default. `--policy-session` is required to start a real session.
+
+Now create the policy:
 ```
 # tpm2_policyauthorize --session seal-wilcard-policy.session --name policy-authorization-key.name --policy seal-wilcard-policy.policy
 ```
+- `--session seal-wilcard-policy.session` specifies the trial session just created.
+- `--name policy-authorization-key.name` specifies the name of the authorization key that will be used to sign policies that can satisfy this policy.
+- `--policy seal-wilcard-policy.policy` saves the policy to a file so that it can be used during object creation later.
+
+Finally, flush the trial session from TPM memory:
+```
+# tpm2_flushcontext seal-wilcard-policy.session
+```
+This last step is not really necessary because we will be rebooting very soon, but is good practice.
+
 ### Seal the LUKS passphrase with a new sealing object under the primary key
 #### Create a sealing object under the primary key.
 ```
@@ -341,9 +395,9 @@ tpm2_create --parent-context primary-key.context --attributes fixedtpm|fixedpare
 #### Store the sealing object in the TPM NV Storage
 ```
 # tpm2_evictcontrol --object-context sealed-passphrase.context --output sealed-passphrase.handle
-# cp sealed-passphrase.handle /boot/sealed-passphrase.handle
-# cp sealed-passphrase.handle /root/sealed-passphrase.handle
-# chmod 400 /root/sealed-passphrase.handle
+# cp sealed-passphrase.handle /boot/tpm2-encrypt/sealed-passphrase.handle
+# cp sealed-passphrase.handle /root/keys/sealed-passphrase.handle
+# chmod 400 /root/keys/sealed-passphrase.handle
 ```
 
 ### Need to reboot to get true PCR values for second policy....

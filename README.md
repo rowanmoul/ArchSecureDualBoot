@@ -10,6 +10,7 @@ The beginning part of this guide assumes you are using a recent copy of the Arch
 
 ```Shell
 pacman -Sy tpm2-tools tpm2-abrmd
+
 systemctl start tpm2-abrmd
 ```
 
@@ -44,7 +45,7 @@ PCR&nbsp;&nbsp;&nbsp;|Description
 1                    |UEFI BIOS Configuration Settings, UEFI Boot Entries, UEFI Boot Order and other data from motherboard NVRAM and CMOS that is related to the firmware and drivers measured into PCR 0.
 2                    |UEFI Drivers and Applications for removable hardware such as adapter cards.<br>Eg. Most modern laptops have a wifi module and an m.2 ssd plugged into the motherboard rather than soldered on.
 3                    |UEFI Variables and other configuration data that is managed by the code measured into PCR 2.
-4                    |Boot Loader (eg. GRUB), and boot attempts.<br>If the first selected UEFI Boot Entry fails to load, that attempt is recorded, and so on until the UEFI BIOS is able to pass control successfully to a UEFI application (usually a boot loader), at which point the binary for that application is also measured into this PCR. 
+4                    |Boot Loader (eg. GRUB), and boot attempts.<br>If the first selected UEFI Boot Entry fails to load, that attempt is recorded, and so on until the UEFI BIOS is able to pass control successfully to a UEFI application (usually a boot loader), at which point the binary for that application is also measured into this PCR.
 5                    |Boot Loader Configuration Data, and possibly (the specification lists these as optional) the UEFI boot entry path that was used, and the GPT/Partition Table data for the drive that the boot loader was loaded from.
 6                    |Platform Specific (your computer manufacturer can use this for whatever they want).
 7                    |Secure Boot Policy<br>This includes all the secure boot varibles, such as PK, KEK, db, and dbx values. Also recorded here is the db value(s) used to validate the Boot Loader Binary, as well as any other binaries loaded with UEFI LoadImage().
@@ -173,6 +174,7 @@ This part happens exactly like it would for a regular partition, except you are 
 
 ```Shell
 mkfs.ext4 /dev/mapper/cryptroot
+
 mount /dev/mapper/cryptroot /mnt
 ```
 
@@ -180,8 +182,11 @@ At this point you may want to quickly verify that everything is working by unmou
 
 ```Shell
 umount /mnt
+
 cryptsetup close cryptroot
+
 cryptsetup open /dev/sda5 cryptroot
+
 mount /dev/mapper/cryptroot /mnt
 ```
 
@@ -325,7 +330,9 @@ To generate the unique data, you can use the TPM's TRNG, or some other source of
 
 ```Shell
 tpm2_getrandom 32 > primary-key-seed.bin
+
 printf `\x20\x00` > primary-key-seed-size.bin
+
 cat primary-key-seed-size.bin primary-key-seed.bin > primary-key-unique.dat
 ```
 
@@ -388,8 +395,11 @@ Then we will copy the access key to a restricted folder in `/root` and make it r
 
 ```Shell
 mkdir /root/keys
+
 chmod 600 /root/keys
+
 cp policy-authorization-access.bin /root/keys/policy-authorization-access.bin
+
 chmod 400 /root/keys/policy-authorization-access.bin
 ```
 
@@ -430,6 +440,7 @@ Since the key will be needed before unlocking the disk, we copy the handle file 
 
 ```Shell
 mkdir /boot/tpm2-encrypt
+
 cp policy-authorization-key.handle /boot/tpm2-encrypt/policy-authorization-key.handle
 ```
 
@@ -437,6 +448,7 @@ We will also copy a backup of the handle file to `/root/keys` and restrict it's 
 
 ```Shell
 cp policy-authorization-key.handle /root/keys/policy-authorization-key.handle
+
 chmod 400 /root/keys/policy-authorization-key.handle
 ```
 
@@ -486,7 +498,7 @@ This last step is not really necessary because we will be rebooting very soon, b
 
 ### Seal the LUKS passphrase with a new sealing object under the primary key
 
-#### Create a sealing object under the primary key.
+#### Create a sealing object under the primary key
 
 ```Shell
 tpm2_create --parent-context primary-key.context --attributes fixedtpm|fixedparent|sensitivedataorigin|adminwithpolicy --sealing-input tpm-passphrase.bin --policy seal-wilcard-policy.policy --key-context sealed-passphrase.context
@@ -496,12 +508,15 @@ tpm2_create --parent-context primary-key.context --attributes fixedtpm|fixedpare
 
 ```Shell
 tpm2_evictcontrol --object-context sealed-passphrase.context --output sealed-passphrase.handle
+
 cp sealed-passphrase.handle /boot/tpm2-encrypt/sealed-passphrase.handle
+
 cp sealed-passphrase.handle /root/keys/sealed-passphrase.handle
+
 chmod 400 /root/keys/sealed-passphrase.handle
 ```
 
-### Need to reboot to get true PCR values for second policy....
+### Need to reboot to get true PCR values for second policy
 
 Setup next-boot policy and use initramfs hooks to set up real policy on reboot.
 
@@ -509,11 +524,12 @@ Current plan:
 TPM sealed luks passkey is stored in TPM NV with flexible policy that is satisfied by another policy. Other Policy involves as many relevant PCRs as possible while maintaining convenience (might ignore bios settings?).
 When a grub or kernel update is installed, other policy is updated (with auth key stored in encrypted disk) to a new temp policy that includes the secure boot PCR, and possibly the BIOS PCR (just not the ones related to grub, kernel, etc.), and the TPM Boot Counter +1 (only next boot allowed).
 Initramfs script will check for:
+
 1. Regular sealed key to unlock disk
 2. Temp sealed key to unlock disk
 3. Put up a password prompt (since we need a fallback)
-  - On password fallback, show which PCR's changed, and ask if TPM seal should be updated
-  - Would like to securely store the PCR values so that if we fall back to a password, the PCRs that changed can be shown to the user so they can decide if these changes were expected. Probably will store them as a salted hash value so the exact value of the PCR is not stored, but new salted hash can be generated.
+    - On password fallback, show which PCR's changed, and ask if TPM seal should be updated
+    - Would like to securely store the PCR values so that if we fall back to a password, the PCRs that changed can be shown to the user so they can decide if these changes were expected. Probably will store them as a salted hash value so the exact value of the PCR is not stored, but new salted hash can be generated.
 
 Actual unlocking will be done via the regular `encrypt` hook, with the TPM unlock hook running first and creating a keyfile for the `encrypt` hook to read. Optional Re-seal will be handled by another hook that runs after the `encrypt` hook has unlocked the drive (since it needs the key in the drive to update the TPM policy.)
 
@@ -596,7 +612,9 @@ Run the above command to convert each of the three certificates, also adding the
 
 ```Shell
 cert-to-efi-sig-list -g $GUID PK.crt PK.esl
+
 cert-to-efi-sig-list -g $GUID KEK.crt KEK.esl
+
 cert-to-efi-sig-list -g $GUID db.crt db.esl
 ```
 
@@ -620,8 +638,11 @@ Run the above command for each of PK, KEK, db, and dbx
 
 ```Shell
 efi-readvar -v PK -o original_PK.esl
+
 efi-readvar -v KEK -o original_KEK.esl
+
 efi-readvar -v db -o original_db.esl
+
 efi-readvar -v dbx -o original_dbx.esl
 ```
 
@@ -631,6 +652,7 @@ With the `.esl` file format, we can easily merge our new keys with the existing 
 
 ```Shell
 cat KEK.esl original_KEK.esl > all_KEK.esl
+
 cat db.esl original_db.esl > all_db.esl
 ```
 
@@ -655,8 +677,11 @@ Run the above command for each `.esl` file:
 
 ```Shell
 sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl PK.auth
+
 sign-efi-sig-list -k PK.key -c PK.crt all_KEK KEK.esl all_KEK.auth
+
 sign-efi-sig-list -k KEK.key -c KEK.crt db all_db.esl all_db.auth
+
 sign-efi-sig-list -k KEK.key -c KEK.crt dbx dbx.esl dbx.auth
 ```
 
@@ -684,8 +709,11 @@ Run the above command for dbx, db, KEK, and PK, preferably in that order, but ju
 
 ```Shell
 efi-updatevar -f dbx.auth dbx
+
 efi-updatevar -f all_db.auth db
+
 efi-updatevar -f all_KEK.auth KEK
+
 efi-updatevar -f PK.auth PK
 ```
 
@@ -698,6 +726,7 @@ If you want to quickly test your handywork `efitools` supplies a `HelloWorld` ef
 
 ```Shell
 mv /boot/EFI/Boot/bootx64.efi /boot/EFI/Boot/bootx64-prev.efi
+
 sbsign --key db.key --cert db.crt --output /boot/EFI/Boot/bootx64.efi /usr/share/efitools/efi/HelloWorld.efi
 ```
 

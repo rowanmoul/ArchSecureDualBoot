@@ -445,7 +445,7 @@ tpm2_create --parent-context primary-key.context --auth-key file:policy-authoriz
 
 - `--parent-context primary-key.context` encrypts the key under the primary key created previously.  
 - `--auth-key file:policy-authorization-access.bin` sets the authorization value for the new key being created.
-  - Since this value is in a file that we just created, we need to append `file:` to the file path given. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/authorizations.md).  
+  - Since this value is in a file that we created, we need to append `file:` to the file path given. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/authorizations.md).  
 - `--key-algorithm rsa2048:rsapss-sha256` sets the key algorithm.
   - this argument specifically sets it to be an `rsa2048` key with a signing scheme of `rsapss` using `sha256` as the hash algorithm. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/alg.md).  
 - `--attributes fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign|restricted` sets the TPM object attributes for the key.
@@ -559,35 +559,69 @@ chmod 400 /root/keys/sealed-passphrase.handle
 
 ### Creating an authorized policy to unseal the LUKS passphrase on boot
 
-At this point we have sealed the LUKS passphrase in a TPM object that is restricted with a policy that must be satisfied by another policy that is authorized (signed) with a key. In order to statisfy this policy, we must create a second policy and sign it. The second policy will be created such that it is satisfied only if the values of certain PCRs are the same as when the policy was created. However, since we are still running on a live disk (if you have been following this guide from the beginning), the current values of most of the PCRs are not the ones that will be found on our new Arch system. There are a few that can be expected not to change in most cases, such as PCR 0, which is the BIOS code, but creating a signed policy that is satisfied by only a few PCR's leaves our sealed LUKS passphrase vulnerable if anyone ever got ahold of that policy.  
-Since we need the policy at early boot, it is easiest to store it in the EFI system partition, just as we did with the handles for the two objects we saved in the TPM. As long as the policy is strong, this is secure because the policy file is nothing more than a digest (of PCR values in this case) and instructions on how to re-create that digest. The TPM follows the instructions to produce it's own digest, and if they match, the policy is satisfied. Since the policy is signed with the authorization key, nobody can tamper with it without destroying the signature. However if there is a weak policy, then there is no need for tampering since it will be easy to satisfy while making malicious changes to the boot configuration.  
-To mitigate this vulnerbility, we can create a temporary policy that will only work on the next boot, and never again afterward. This is possible because the TPM has an internal 32-bit counter that is incremented on every boot, never decremented, and can't be reset without running `tpm2_clear` which requires authorization (see previous section about the Dictionary Attack Lockout Authorization). We can create a policy that includes a requirement that the value of the boot counter be exactly one plus the current value such that it can only be satisfied on the next boot (in addition to PCR values that we do not expect to change).  
-This strategy will also be used whenever we install an upate for the kernel or the boot loader, though it will be done automatically in install hooks that we will setup shortly. Whenever we boot, an `initramfs` hook  (also to be setup shortly) will look first for a "secure" policy to use, and failing that (such as when we install a kernel update), it will look for a temporary policy as described above. If this temporary policy is satisfied then it will automatically create a new "secure" policy with the new PCR values that incorporate the updated kernel. We can take advantage of this automated policy creation in our initial setup too, by manually creating a temporary policy and then letting the `initramfs` hook automatically create the "secure" policy when we reboot into our new arch system for the first time.
+At this point we have sealed the LUKS passphrase in a TPM object that is restricted with a policy that must be satisfied by another policy that is authorized (signed) with a key. In order to statisfy this policy, we must create a second policy and sign it. The second policy will be created such that it is satisfied only if the values of certain PCRs are the same as when the policy was created. However, since we are still running on a live disk (if you have been following this guide from the beginning), the current values of most of the PCRs are not the ones that will be found on our new Arch system. There are a few that can be expected not to change in most cases, such as PCR 0, which is the BIOS code, but creating a signed policy that is satisfied by only a few PCR's leaves our sealed LUKS passphrase vulnerable if anyone ever got ahold of that policy.
 
-#### Creat a temporary policy
+Since we need the policy at early boot, it is easiest to store it in the EFI system partition, just as we did with the handles for the two objects we saved in the TPM. As long as the policy is strong, this is secure because the policy file is nothing more than a digest (of PCR values in this case). The user must re-create the policy with a real authorization session, after which the TPM will compare the two digests. The policy is satisfied if they match. Normally a policy is stored as part of the TPM object, however this one is stored in a file because it will be used to satisfy a wildcard policy. Since the policy is accompanied by a signature from the authorization key, nobody can tamper with it without causing the signature to fail verification. However if there is a weak policy, then there is no need for tampering since it will be easy to satisfy while making malicious changes to the boot configuration.
 
-With all of the above said, lets create the temporary policy. To start with, we start a trial auth session, just like when creating the wildcard policy:
+To mitigate this vulnerbility, we can create a temporary policy that will only work on the next boot, and never again afterward. This is possible because the TPM has an internal 32-bit counter that is incremented on every boot, never decremented, and can't be reset without running `tpm2_clear` which requires authorization (see previous section about the Dictionary Attack Lockout Authorization). We can create a policy that includes a requirement that the value of the boot counter be exactly one plus the current value such that it can only be satisfied on the next boot (in addition to PCR values that we do not expect to change).
+
+This strategy will also be used whenever we install an upate for the kernel or the boot loader, though it will be done automatically in install hooks that we will setup shortly. Whenever we boot, an `initramfs` script  (also to be setup shortly) will look first for a "more secure" policy to use, and failing that (such as when we install a kernel update), it will look for a temporary policy as described above. If this temporary policy is satisfied then it will automatically create a new "more secure" policy with the new PCR values that incorporate the updated kernel. We can take advantage of this automated policy creation in our initial setup too, by manually creating a temporary policy and then letting the `initramfs` script automatically create the "more secure" policy when we reboot into our new arch system for the first time.
+
+#### Create a temporary policy
+
+With all of the above said, lets create the temporary policy.  
+Start a trial auth session, just like when creating the wildcard policy:
 
 ```Shell
 tpm2_startauthsession --hash-algorithm sha256 --session temporary-authorized-policy.session
 ```
 
-Then we add the PCR values that we know will not change to the policy:
+Add the PCR values that we know will not change to the policy:
 
 ```Shell
 tpm2_policypcr --pcr-list sha256:0,1,2,3 --session temporary-authorized-policy.session
 ```
 
-And the boot counter +1 requirement:
+- `--pcr-list sha256:0,1,2,3` specifies the use of PCRs 0-3 from the sha256 bank.
+  - Many TPMs support multiple banks of PCRs that use different algorithms. At minimum there is usually sha1 and sha256. To check what your TPM has allocated, run `tpm2_pcrread`.
+  - If your TPM only has sha1, adjust this option accordingly. The `initramfs` script will check for sha256 and use sha1 as a fallback.
+- `--session temporary-authorized-policy.session` specifies the trial session we just created.
+
+Add the boot counter + 1 requirement using some `sed` magic to get the current boot counter:
 
 ```Shell
-tpm2_policycountertimer
+tpm2_policycountertimer ---session temporary-authorized-policy.session --policy temporary-authorized-policy.policy --eq restarts=$(($(tpm2_readclock | sed -En "s/[[:space:]]*restart_count: ([0-9]+/\1/p)") + 1))
 ```
 
-After creating the policy, we flush it from the TPM memory:
+- `---session temporary-authorized-policy.session` specifies the trial session we just created.
+- `--policy temporary-authorized-policy.policy` specifies the file where the final policy should be saved.
+- `--eq` specifies an equality comparison
+- `restarts=<see above>` specifies that the comparison should be done with the restarts counter and the value it should be compared with.
+  - Note that the `=` here has nothing to do with the type of comparison to be done, which happens to be equality in this case.
+  - The shell expansion is trimmed here for readability, but it basically uses `tpm2_readclock` to get the current `restart_count` and adds one. For example, if the current `restart_count` is 156, then this argument would boil down to `restarts=157`
+
+After creating the policy, we flush the session from the TPM memory:
 
 ```Shell
 tpm2_flushcontext temporary-authorized-policy.session
+```
+
+#### Sign the Policy
+
+In order for the wildcard policy to accept this new policy, it must be signed by the key we created. To do this, we can use the `tpm2_sign` command:
+
+```Shell
+tpm2_sign --key-context policy-authorization-key.handle --auth file:policy-authorization-access.bin --hash-algoritm sha256 --signature temporary-authorized-policy.signature temporary-authorized-policy.policy
+```
+
+#### Copy the policy and its signature to /boot/tpm2-encrypt
+
+We will need these files to unlock the drive at boot, so they are copied to the EFI partition.
+
+```Shell
+cp temporary-authorized-policy.policy /boot/tpm2-encrypt/temporary-authorized-policy.policy
+
+cp temporary-authorized-policy.signature /boot/tpm2-encrypt/temporary-authorized-policy.signature
 ```
 
 ### Unsealing your LUKS passphrase automatically in initramfs

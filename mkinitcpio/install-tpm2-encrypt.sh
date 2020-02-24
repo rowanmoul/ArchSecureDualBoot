@@ -3,7 +3,9 @@
 build() {
     local mod
 
+    # Add the tpm kernel module so we can access the tpm
     add_module "tpm"
+
 
     add_binary "tpm2_pcrread"
     add_binary "tpm2_verifysignature"
@@ -14,6 +16,10 @@ build() {
     add_binary "tpm2_policyauthorize"
     add_binary "tpm2_unseal"
     add_binary "tpm2_flushcontext"
+
+    add_file "/root/keys/sealed-passphrase.handle"
+    add_file "/root/keys/policy-authorization-key.handle"
+    add_file "/root/keys/policy-authorization-key.name"
 
     add_runscript
 }
@@ -27,14 +33,19 @@ Users should specify the device to be unlocked according the requirements of the
 
 For unlocking via TPM 2.0, this hook makes use of LUKS passphrase sealed in a TPM object that is restricted with a policy that requires a second policy signed with an authorization key. Intial setup is too lengthy for this help text. Please refer to the readme in this repo: https://github.com/rowanmoul/ArchSecureDualBoot
 
-To specify the sealed TPM object's location in the TPM NVRAM, 'sealedkeytpm=handle' can be specified on
-the kernel command line, where 'handle' is either a hexidecimal value indicating the NVRAM location directlly, or the path to a handle file on the EFI system partition.
-If this argument is not specified the hook will look for a file called 'sealed-passphrase.handle' in /EFI/arch/tpm2-encrypt on the EFI system partition.
+To specify the sealed TPM object's location in the TPM NVRAM, 'tpm_sealed_key=handle' can be specified on
+the kernel command line, where 'handle' is either a hexidecimal value indicating the NVRAM location directly (in the form 0x81000000), or the path to a handle file included in the initramfs.
+If this argument is not specified the hook will look for a file called 'sealed-passphrase.handle' at /root/keys/ inside the initramfs.
 
-To specify the policy authorization key's location in the TPM NVRAM, 'policyauthtpm=name:handle' can be specified on the kernel command line.
-'name' is the name of the key in the TPM, (typically a sha256 digest), or the path to a name file in on the EFI system partition.
+To specify the policy authorization key's location in the TPM NVRAM, 'tpm_policy_auth=name:handle' can be specified on the kernel command line.
+'name' is the name of the key in the TPM, (typically a sha256 digest), or the path to a name file included in the initramfs.
 'handle' is as above for the sealed key except is specifies the location of the policy authorization key.
-If this argument is not specified, the hook will look for files called 'policy-authorization-key.name' and 'policy-authorization-key.handle' in /EFI/arch/tpm2-encrypt on the EFI system partition.
+If this argument is not specified, the hook will look for files called 'policy-authorization-key.name' and 'policy-authorization-key.handle' at /root/keys/ inside the initramfs.
+
+In order to facilitate the above defaults, this hook will copy the following files into the initramfs image if they exist:
+    /root/keys/sealed-passphrase.handle
+    /root/keys/policy-authorization-key.handle
+    /root/keys/policy-authorization-key.name
 
 If the handle of a TPM entity cannot be found, or if the TPM fails to unseal the key, you will be prompted for the passphrase.
 This means you must have a keyboard available to input it, and you may need

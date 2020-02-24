@@ -4,18 +4,20 @@ run_hook() {
     modprobe -a -q tpm >/dev/null 2>&1
 
     # Base Path
-    base_path="/some_mountpoint/EFI/arch/tpm2-encrypt/"
+    base_key_path="/root/keys"
 
     # Get sealed object handle if specified
-    if [ -n "$cryptkeytpm"]; then
+    if [ -n "$tpm_sealed_key"]; then
         IFS=: read sealed_key_handle <<EOF
-$cryptkeytpm
+$tpm_sealed_key
 EOF
+    elif [[ -e $base_key_path/sealed-passphrase.handle ]]
+        sealed_key_handle=$base_key_path/sealed-passphrase.handle
     else
-        sealed_key_handle=$base_path/sealed-passphrase.handle
+        # Do some fail/abort thing here.
     fi
 
-    tpm2_verifysignature -c $base_path/policy-authorization-key.handle -g sha256 -m $base_path/authorized-policy.policy -s $base_path/authorized-policy.signature -t authorized-policy.tkt
+    tpm2_verifysignature -c $base_key_path/policy-authorization-key.handle -g sha256 -m $base_key_path/authorized-policy.policy -s $base_key_path/authorized-policy.signature -t authorized-policy.tkt
 
     tpm2_startauthsession --policy-session -S sealed-auth-session.ctx
 
@@ -23,9 +25,9 @@ EOF
 
     tpm2_policycountertimer -S sealed-auth-session.ctx --eq resets=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p")
 
-    tpm2_policyauthorize -S sealed-auth-session.ctx -i $base_path/authorized-policy.policy -n $base_path/policy-authorization-key.name -t authorized-policy.tkt
+    tpm2_policyauthorize -S sealed-auth-session.ctx -i $base_key_path/authorized-policy.policy -n $base_key_path/policy-authorization-key.name -t authorized-policy.tkt
 
-    tpm2_unseal -p"session:sealed-auth-session.ctx" -c $base_path/sealed_passphrase.handle > /crypto_keyfile.bin
+    tpm2_unseal -p"session:sealed-auth-session.ctx" -c $base_key_path/sealed_passphrase.handle > /crypto_keyfile.bin
 
     tpm2_flushcontext sealed-auth-session.ctx
 }

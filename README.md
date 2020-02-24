@@ -313,7 +313,8 @@ systemctl enable tpm2-abrmd
 
 ## Unlocking LUKS Automatically with TPM 2.0
 
-> Please note that all file extensions used in this section with `tpm2_*` commands are purely for readability.
+Please note that all file extensions used in this section with `tpm2_*` commands are purely for readability.  
+That said, any files that are saved for later use should retain their names as used here. The install and boot hooks we will be adding expect those files to have the names used here.
 
 ### Mount a Ramfs as a working directory
 
@@ -331,7 +332,7 @@ To generate the unique data, you can use the TPM's TRNG, or some other source of
 ```Shell
 tpm2_getrandom 32 > primary-key-seed.bin
 
-printf `\x20\x00` > primary-key-seed-size.bin
+printf '\x20\x00' > primary-key-seed-size.bin
 
 cat primary-key-seed-size.bin primary-key-seed.bin > primary-key-unique.dat
 ```
@@ -397,16 +398,20 @@ Next we need to create a new LUKS passphrase to use with the TPM. If you set the
 Again we can use the TPM's TRNG to generate a random key:
 
 ```Shell
-tpm2_getRandom 32 > tpm-passphrase.bin
+tpm2_getrandom 32 > tpm-luks-passphrase.bin
 ```
 
-And then we can use the `cryptsetup`'s `luksAddKey` command:
+And then we can use `cryptsetup` to add the key to the LUKS header:
 
 ```Shell
-cryptsetup luksAddKey /dev/sda5 tpm-passphrase.bin
+cryptsetup luksAddKey /dev/sda5 tpm-luks-passphrase.bin
 ```
 
-This command is pretty self explanitory. The first positional argument is our LUKS device, and the second is a file containing the passphrase to add. It will prompt you for your previous passphrase before adding the new key in keyslot 2 (A LUKS device can have up to 10 passphrases).
+- `luksAddKey` tells `cryptsetup` we want to add a new passphrase.
+- `/dev/sda5` specifies our LUKS device.
+- `tpm-passphrase.bin` specifies the new passphrase we want to add.
+
+This command will prompt you for your previous passphrase before adding the new key in keyslot 2 (A LUKS device can have up to 10 passphrases).
 
 ### Create a policy to seal the passphrase with
 
@@ -440,20 +445,38 @@ The key cannot be written to prevent accidental overwrite. The root user can exp
 We will create this key in the TPM and restrict it's access with the key we just created:
 
 ```Shell
-tpm2_create --parent-context primary-key.context --auth-key file:policy-authorization-access.bin --key-algorithm rsa2048:rsapss-sha256 --attributes fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign|restricted --key-context policy-authorization-key.context
+tpm2_create --parent-context primary-key.context --key-auth file:policy-authorization-access.bin --key-algorithm rsa2048:rsapss-sha256:null --attributes "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign" --key-context policy-authorization-key.context
 ```
 
 - `--parent-context primary-key.context` encrypts the key under the primary key created previously.  
 - `--auth-key file:policy-authorization-access.bin` sets the authorization value for the new key being created.
   - Since this value is in a file that we created, we need to append `file:` to the file path given. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/authorizations.md).  
-- `--key-algorithm rsa2048:rsapss-sha256` sets the key algorithm.
-  - this argument specifically sets it to be an `rsa2048` key with a signing scheme of `rsapss` using `sha256` as the hash algorithm. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/alg.md).  
-- `--attributes fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign|restricted` sets the TPM object attributes for the key.
+- `--key-algorithm rsa2048:rsapss-sha256:null` sets the key algorithm.
+  - This argument specifically sets it to be an `rsa2048` key with a signing scheme of `rsapss` using `sha256` as the hash algorithmm, as well as a null symetric algorithm. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/alg.md).  
+- `--attributes fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign` sets the TPM object attributes for the key.
   - See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/obj-attrs.md) for details, and note that the attributes here restrict this key to only be a signing key, to only sign TPM generated data (such as policies), and to only be accessible with the auth-key value provided, among a few other things.  
 - `--key-context policy-authorization-key.context` saves the key's context to a file for reference later.
   - just like with the primary key.
 
 Unlike the primary key, most of the options that have defaults have been specified here in order to create this key just for signing our policies. The only option not specified is the hash algorithm, which is sha256 by default and is not to be confused with the hash algorithm specified as part of the signing scheme above. This is used for a different purpose.
+
+##### If you get an error here
+
+Some TPMs don't support all commands. If you get an error here about the `Esys_CreateLoaded` command not being supported you will have to remove the `--key-context` option from `tpm2_create`, and add:
+
+```Shell
+--public policy-authorization-key.public --private policy-authorization-key.private
+```
+
+These options save the public and private portions of the key (encrypted with your primary key) to files.
+
+Then you will have to load the created key into the TPM memory with a separate command to get the `key-context`:
+
+```Shell
+tpm2_load --parent-context primary-key.context --public policy-authorization-key.public --private policy-authorization-key.private --key-context policy-authorization-key.context
+```
+
+The options given to this command are fairly self explanitory given what we have covered so far.
 
 #### Store the policy authorization key in the TPM permanently
 
@@ -489,11 +512,27 @@ Storing the handle file in the clear on the efi partition is not a security issu
 The name of the authorization key (which is a digest that uniquely identifies the key in the TPM) is needed to create the wildcard policy.
 
 ```Shell
-tpm2_readpublic --context-object policy-authorization-key.handle --name policy-authorization-key.name
+tpm2_readpublic --object-context policy-authorization-key.handle --name policy-authorization-key.name
 ```
 
-- `--context-object policy-authorization-key.handle` specifies the TPM object to read the public area of.
+- `--object-context policy-authorization-key.handle` specifies the TPM object to read the public area of.
 - `--name policy-authorization-key.name` saves the name portion of the public area to a file.
+
+As with the handle, we will need this name at boot before unlocking the disk, so we copy it to the EFI partition:
+
+```Shell
+mkdir /boot/tpm2-encrypt
+
+cp policy-authorization-key.name /boot/tpm2-encrypt/policy-authorization-key.name
+```
+
+We will also copy a backup of the name file to `/root/keys` and restrict it's acces.
+
+```Shell
+cp policy-authorization-key.name /root/keys/policy-authorization-key.name
+
+chmod 400 /root/keys/policy-authorization-key.name
+```
 
 #### Create Wilcard Policy with the authorization key
 
@@ -533,15 +572,19 @@ Now that we have made a policy, we can seal the LUKS passphrase we created into 
 #### Create a sealing object under the primary key
 
 ```Shell
-tpm2_create --parent-context primary-key.context --attributes fixedtpm|fixedparent|sensitivedataorigin|adminwithpolicy --sealing-input tpm-passphrase.bin --policy seal-wilcard-policy.policy --key-context sealed-passphrase.context
+tpm2_create --parent-context primary-key.context --attributes fixedtpm|fixedparent|adminwithpolicy --sealing-input tpm-luks-passphrase.bin --policy seal-wilcard-policy.policy --key-context sealed-passphrase.context
 ```
 
-This is almost identical to how the Policy Authorization Key was created, with only a few differences that will be listed:
+This is almost identical to how the Policy Authorization Key was created, with only a few differences that will be listed, along with some defaults that are being used:
 
-- `--attributes fixedtpm|fixedparent|sensitivedataorigin|adminwithpolicy`
+- `--attributes fixedtpm|fixedparent|adminwithpolicy`
   - The final attribute here ensures the sealed object can only be unsealed with a policy.
-- `--sealing-input tpm-passphrase.bin` passes the previously created LUKS passphrase as the data to be sealed in the object.
+- `--sealing-input tpm-luks-passphrase.bin` passes the previously created LUKS passphrase as the data to be sealed in the object.
 - `--policy seal-wilcard-policy.policy` sets the policy of the sealed object to the wildcard policy created previously.
+- Default Key Algorithm: `hmac:null:null` (sealed data can only be a keyed hash).
+- Default Hash Algorithm: sha256
+
+If you encountered an error with `tpm2_create` previously, repeat the same steps here.
 
 #### Store the sealing object in the TPM NV Storage
 
@@ -590,15 +633,15 @@ tpm2_policypcr --pcr-list sha256:0,1,2,3 --session temporary-authorized-policy.s
 Add the boot counter + 1 requirement using some `sed` magic to get the current boot counter:
 
 ```Shell
-tpm2_policycountertimer ---session temporary-authorized-policy.session --policy temporary-authorized-policy.policy --eq restarts=$(($(tpm2_readclock | sed -En "s/[[:space:]]*restart_count: ([0-9]+/\1/p)") + 1))
+tpm2_policycountertimer ---session temporary-authorized-policy.session --policy temporary-authorized-policy.policy --eq resets=$(($(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p)") + 1))
 ```
 
 - `---session temporary-authorized-policy.session` specifies the trial session we just created.
 - `--policy temporary-authorized-policy.policy` specifies the file where the final policy should be saved.
 - `--eq` specifies an equality comparison
-- `restarts=<see above>` specifies that the comparison should be done with the restarts counter and the value it should be compared with.
+- `resets=<see above>` specifies that the comparison should be done with the restarts counter and the value it should be compared with.
   - Note that the `=` here has nothing to do with the type of comparison to be done, which happens to be equality in this case.
-  - The shell expansion is trimmed here for readability, but it basically uses `tpm2_readclock` to get the current `restart_count` and adds one. For example, if the current `restart_count` is 156, then this argument would boil down to `restarts=157`
+  - The shell expansion is trimmed here for readability, but it basically uses `tpm2_readclock` to get the current `reset_count` and adds one. For example, if the current `reset_count` is 156, then this argument would boil down to `resets=157`
 
 After creating the policy, we flush the session from the TPM memory:
 
@@ -829,9 +872,10 @@ More Pacman hooks!
 
 ## Dual Booting with Windows without breaking Bitlocker on every bootloader update
 
-Here we're going to do a little initramfs magic to add a boot entry for Windows in GRUB that doesn't involve chainloading, which would break TPM based Bitlocker every time GRUB is updated.  
-Basically we are going to create an initramfs that sets the EFI BootNext variable and then reboots. This way, Windows always boots the same way - directly from the Windows Boot Manager, without even needing to know that GRUB exists. If Windows wants to update the boot manager, it already has a process for re-sealing the Bitlocker key in the TPM.
-I couldn't find a way to do this directly in GRUB. If you know how, please let me know or submit a PR!
+Here we're going to do a little initramfs magic to add a boot entry for Windows in GRUB that doesn't involve chainloading from grub, which would break TPM based Bitlocker every time GRUB is updated.  
+Instead we are going to create an initramfs that sets the EFI BootNext variable and then reboots. This way, Windows always boots the same way - directly from the Windows Boot Manager, without even needing to know that GRUB exists. If Windows wants to update the boot manager, it already has a process for re-sealing the Bitlocker key in the TPM.
+I couldn't find a way to do this directly in GRUB. If you know how, please let me know or submit a PR!  
+To create this special initramfs and boot entry, start by copying the `mkinitcpio` hook files from the folder of the same name in this repo.
 
 ## Resources
 

@@ -526,7 +526,7 @@ mkdir /boot/tpm2-encrypt
 cp policy-authorization-key.name /boot/tpm2-encrypt/policy-authorization-key.name
 ```
 
-We will also copy a backup of the name file to `/root/keys` and restrict it's acces.
+We will also copy a backup of the name file to `/root/keys` and restrict it's access.
 
 ```Shell
 cp policy-authorization-key.name /root/keys/policy-authorization-key.name

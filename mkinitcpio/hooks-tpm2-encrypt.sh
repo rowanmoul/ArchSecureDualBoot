@@ -1,10 +1,20 @@
 #!/usr/bin/ash
 
+run_earlyhook() {
+    mkdir /efi
+    if [ -n "$efi_part" ]; then
+        if resolved_efi_part=$(resolve_device "$efi_part"); then
+            mount $resolved_efi_part /efi
+            return
+    fi
+    echo "some message about failure"
+}
+
 run_hook() {
     modprobe -a -q tpm >/dev/null 2>&1
 
     # Base Path
-    base_key_path="/root/keys"
+    base_key_path="/efi/EFI/arch/tpm2-encrypt/"
 
     # Get sealed object handle if specified
     if [ -n "$tpm_sealed_key"]; then
@@ -35,6 +45,7 @@ EOF
 run_cleanuphook() {
     # This is where we will optionally re-seal on the current PCR values.
     # This is done as a cleanup hook to ensure that the root FS is mounted already so we can use the auth key to change the TPM Policy.
+    umount /efi
 }
 
 # vim: set ft=sh ts=4 sw=4 et:

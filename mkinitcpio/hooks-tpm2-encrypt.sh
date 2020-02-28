@@ -4,10 +4,12 @@ run_earlyhook() {
     mkdir /efi
     if [ -n "$efi_part" ]; then
         if resolved_efi_part=$(resolve_device "$efi_part"); then
-            mount $resolved_efi_part /efi
-            return
+            if mount "$resolved_efi_part" /efi; then
+                return
+            fi
+        fi
     fi
-    echo "some message about failure"
+    echo "tpm2-encrypt could not mount EFI partition. Some features are not available. Set efi_part on kernel command line to avoid this message."
 }
 
 run_hook() {
@@ -16,15 +18,13 @@ run_hook() {
     # Base Path
     base_key_path="/efi/EFI/arch/tpm2-encrypt/"
 
-    # Get sealed object handle if specified
-    if [ -n "$tpm_sealed_key"]; then
-        IFS=: read sealed_key_handle <<EOF
-$tpm_sealed_key
-EOF
-    elif [[ -e $base_key_path/sealed-passphrase.handle ]]
+    # Validate input and get sealed key handle if specified
+    if [ -n "$tpm_sealed_key" ] && \( [ -e $tpm_sealed_key ] || [ 1 ] \); then 
+        sealed_key_handle=$tpm_sealed_key
+    elif [ -e $base_key_path/sealed-passphrase.handle ]; then
         sealed_key_handle=$base_key_path/sealed-passphrase.handle
     else
-        # Do some fail/abort thing here.
+        echo "something bad" # Do some fail/abort thing here.
     fi
 
     tpm2_verifysignature -c $base_key_path/policy-authorization-key.handle -g sha256 -m $base_key_path/authorized-policy.policy -s $base_key_path/authorized-policy.signature -t authorized-policy.tkt
@@ -37,7 +37,7 @@ EOF
 
     tpm2_policyauthorize -S sealed-auth-session.ctx -i $base_key_path/authorized-policy.policy -n $base_key_path/policy-authorization-key.name -t authorized-policy.tkt
 
-    tpm2_unseal -p"session:sealed-auth-session.ctx" -c $base_key_path/sealed_passphrase.handle > /crypto_keyfile.bin
+    tpm2_unseal -p "session:sealed-auth-session.ctx" -c $base_key_path/sealed_passphrase.handle > /crypto_keyfile.bin
 
     tpm2_flushcontext sealed-auth-session.ctx
 }

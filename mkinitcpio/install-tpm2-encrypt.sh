@@ -39,7 +39,7 @@ To specify the policy authorization key's location in the TPM NVRAM, 'tpm_policy
 'handle' is as above for the sealed key except is specifies the location of the policy authorization key.
 If this argument is not specified, the hook will look for files called 'policy-authorization-key.name' and 'policy-authorization-key.handle' in /EFI/arch/tpm2-encrypt on the EFI system partition.
 
-In order to access the EFI system partition, `efi_part=device` must be specified on the kernel command line, where 'device' can be a location in /dev or a uuid etc. Refer to documentation for specifying the `root=device` argument for formatting details.
+In order to access the EFI system partition, 'efi_part=device' must be specified on the kernel command line, where 'device' can be a location in /dev or a uuid etc. Refer to documentation for specifying the `root=device` argument for formatting details.
 
 If the handle of a TPM entity cannot be found, or if the TPM fails to unseal the key, you will be prompted for the passphrase.
 This means you must have a keyboard available to input it, and you may need

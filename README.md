@@ -68,7 +68,8 @@ The version of `tpm2-tools` used to write this guide was `4.1.1`, however note t
 
 The `tpm2-tss` library is an implementation of the TCG's "TPM Software Stack" as specified in the TPM2 Library Specification linked to previously. This is an open source implemenation developed by Intel along side `tpm2-tools`. There is also a "competing" software stack by IBM (also open source), however I do not beleive the tools are compatible with it. The version of `tpm2-tss` used in this guide is `2.3.2`
 
-`tpm2-abrmd` is a user space TPM Access Broker and Resource Management Daemon. It does exactly what it says on the tin.  While it is true that the tools/tss can just access the TPM directly (the kernel makes it available as `/dev/tpm0`), this daemon allows for multiple programs to use the TPM at the same time without colliding. It also helps with certain commands by acting as buffer when we want to send the TPM more data than it can otherwise handle all at once, which is more common that you think (TPM's have a very small minimum buffer size and most vendors don't bother to make it bigger). It also provides extended session support when creating policies. The version used in this guide is `2.3.1`.
+`tpm2-abrmd` is a user space TPM Access Broker and Resource Management Daemon. It does exactly what it says on the tin.  While it is true that the tools/tss can just access the TPM directly (the kernel makes it available as `/dev/tpm0`), this daemon allows for multiple programs to use the TPM at the same time without colliding, among other helpful functions. It also provides extended session support when creating policies. The version used in this guide is `2.3.1`.  
+The kernel has a built in resource manager at `/dev/tpmrm0` but it is not as fully featured as the userspace one.
 
 ## Installing Arch Linux on an Encrypted Disk// alongside Windows with Bitlocker
 

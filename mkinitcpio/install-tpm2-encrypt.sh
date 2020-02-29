@@ -62,7 +62,7 @@ tpm_sealed_key=handle
     - 'handle' is the path to a handle file on the given partition.
     - If this argument is not specified, the hook will look for files called
       'policy-authorization-key.name' and 'policy-authorization-key.handle'
-      in /EFI/arch/tpm2-encrypt on the EFI system partition.
+      in /EFI/arch/tpm2-encrypt on the given partition.
 
 If the handle of a TPM entity cannot be found, or if the TPM fails
 to unseal the key, you will be prompted for the passphrase.

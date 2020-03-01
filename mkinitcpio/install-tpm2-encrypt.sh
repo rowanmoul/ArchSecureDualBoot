@@ -46,31 +46,51 @@ tpm_efi_part=device
     - Refer to documentation for specifying the 'root=device' argument for
       formatting details, but uuid is recommended.
     - Technicaly you could put any unencrypted partition here.
-      EFI is just the simplest and nearly guaranteed to be available.
+      EFI is just the simplest and should always be available.
 
 optional kernel command line arguments:
 
+'tpm_file_dir=directory'
+    - Specifies the directory in which to look for files needed by this hook
+      such as authorized policy files, signatures, and key handle files.
+    - 'directory' is the path to a directory on the partition given by
+      'tpm_efi_part' and must begin with a / at the top level of that partition.
+    - This directory should contain all of the files specified in the below
+      optional arguments, as well as the authorized and temporary policies.
+      Some of these policies are written by pacman hooks so their file names
+      cannot be speciifed like the key handles below for simplicity.
+      Please refer to the initial setup readme for further details.
+    - If this argument is not specified, the hook will use
+      /EFI/arch/tpm2-encrypt on the given partition as the default.
+
 tpm_sealed_key=handle
     - Specifies the sealed TPM object's location in the TPM NVRAM.
-    - 'handle' is the path to a handle file on the given partition.
+    - 'handle' is the file name of a handle file in the directory given above.
     - If this argument is not specified the hook will look for a file called
-    'sealed-passphrase.handle' in /EFI/arch/tpm2-encrypt on the given partition.
+    'sealed-passphrase.handle' in the directory given above.
 
 'tpm_policy_auth=name:handle'
     - Specifies the policy auth key's name and location in the TPM NVRAM.
-    - 'name' is the path to a name file in on the given partition.
-    - 'handle' is the path to a handle file on the given partition.
+    - 'name' is the file name of a name file in the directory given above.
+    - 'handle' is the file name of a handle file in the directory given above.
     - If this argument is not specified, the hook will look for files called
       'policy-authorization-key.name' and 'policy-authorization-key.handle'
-      in /EFI/arch/tpm2-encrypt on the given partition.
+      in the directory given above.
 
-If the handle of a TPM entity cannot be found, or if the TPM fails
+'tpm_pcr_bank=hashalg'
+    - Specifies which PCR bank is used for policy creation and verification.
+    - 'hashalg' is the type of hash used by the PCR bank. Eg 'sha256' or 'sha1'.
+    - If this argument is not specified it will default to the sha256 bank.
+    - Check the output of tpm2_pcrread to see what your tpm has allocated.
+
+If any of the above files cannot be found, or if the TPM fails
 to unseal the key, you will be prompted for the passphrase.
 This means you must have a keyboard available to input it.
 
 In the case that the TPM fails to unseal the key, a list of PCR values that
-changed since the last seal will be shown, and you will be asked if you want
-to re-seal on the new PCR values after unlocking the volume with a password.
+changed since the last time a policy was authorized will be shown, and you will
+be asked if you want to create a new authorized policy on the new PCR values
+after unlocking the volume with a password.
 The previous values are signed and verified with the policy authorization key
 to maintain integrity and trust.
 HELPEOF

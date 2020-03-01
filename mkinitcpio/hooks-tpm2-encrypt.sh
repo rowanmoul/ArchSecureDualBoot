@@ -8,7 +8,6 @@ run_earlyhook() {
     if [ -n "$tpm_efi_part" ] && resolved_efi_part="$(resolve_device "$tpm_efi_part")" && mount "$resolved_efi_part" /efi; then
         return 0
     else
-        echo "tpm2-encrypt could not mount partition. Some features will not be available. Set tpm_efi_part on kernel command line to avoid this message."
         return 1
     fi
 }
@@ -17,14 +16,26 @@ run_hook() {
     # make sure the tpm module is loaded
     modprobe -a -q tpm >/dev/null 2>&1
 
-    # Base Path
-    base_key_path="/efi/EFI/arch/tpm2-encrypt/"
+    if ! mountpoint -q "/efi"; then
+        echo "tpm2-encrypt could not mount tpm_efi_part partition. Falling back to passphrase prompt."
+        return 1 
+    fi
 
-    # Validate input and get sealed key handle if specified
-    if [ -n "$tpm_sealed_key" ] && [ -f "$tpm_sealed_key" ]; then 
-        sealed_key_handle=$tpm_sealed_key
-    elif [ -f $base_key_path/sealed-passphrase.handle ]; then
-        sealed_key_handle=$base_key_path/sealed-passphrase.handle
+    # Check for tpm_file_dir and validate input
+    if [ -n "$tpm_file_dir" ] && [ -d "/efi$tpm_file_dir" ]; then
+        base_file_path="/efi$tpm_file_dir"
+    elif [ -d "/efi/EFI/arch/tpm2-encrypt" ]; then
+        base_file_path="/efi/EFI/arch/tpm2-encrypt"
+    else
+        echo "tpm_file_dir and/or default file directory not available. Falling back to passphrase prompt."
+        return 1
+    fi
+
+    # Check for tpm_sealed_key and validate input
+    if [ -n "$tpm_sealed_key" ] && [ -f "$base_file_path/$tpm_sealed_key" ]; then 
+        sealed_key_handle="$base_file_path/$tpm_sealed_key"
+    elif [ -f "$base_file_path/sealed-passphrase.handle" ]; then
+        sealed_key_handle="$base_file_path/sealed-passphrase.handle"
     else
         echo "tpm_sealed_key not specified and default not available. Falling back to passphrase prompt."
         return 1
@@ -35,36 +46,90 @@ run_hook() {
         IFS=: read -r pa_name pa_handle <<EOF
 $tpm_policy_auth
 EOF
-        # Validate name input and get file path if specified
-        if [ -n "$pa_name" ] && [ -f "$pa_name" ]; then 
-            policy_authorization_key_name=$pa_name
-        elif [ -f $base_key_path/policy-authorization-key.name ]; then
-            policy_authorization_key_name=$base_key_path/sealed-passphrase.handle
+        # Validate name input and get file name if specified
+        if [ -n "$pa_name" ] && [ -f "$base_file_path/$pa_name" ]; then 
+            policy_authorization_key_name="$base_file_path/$pa_name"
+        elif [ -f "$base_file_path/policy-authorization-key.name" ]; then
+            policy_authorization_key_name="$base_file_path/policy-authorization-key.name"
         fi
 
-        # Validate handle input and get file path if specified
-        if [ -n "$pa_handle" ] && [ -f "$pa_handle" ]; then 
-            policy_authorization_key_handle=$pa_handle
-        elif [ -f $base_key_path/policy-authorization-key.handle ]; then
-            policy_authorization_key_handle=$base_key_path/sealed-passphrase.handle
+        # Validate handle input and get file name if specified
+        if [ -n "$pa_handle" ] && [ -f "$base_file_path/$pa_handle" ]; then 
+            policy_authorization_key_handle="$base_file_path/$pa_handle"
+        elif [ -f "$base_file_path/policy-authorization-key.handle" ]; then
+            policy_authorization_key_handle="$base_file_path/policy-authorization-key.handle"
         fi
 
         # Verify both name and handle were set
         if ! \( [ -f $policy_authorization_key_name ] && [ -f $policy_authorization_key_handle ] \); then
-            echo "tpm_policy_auth could not be parsed and defaults not available. Falling back to passphrase prompt."
+            echo "tpm_policy_auth file names not found and defaults not available. Falling back to passphrase prompt."
             return 1
         fi
     # Otherwise check for defaults
-    elif [ -f $base_key_path/policy-authorization-key.name ] && [ -f $base_key_path/policy-authorization-key.handle ]; then
-        policy_authorization_key_name=$base_key_path/policy-authorization-key.name
-        policy_authorization_key_handle=$base_key_path/policy-authorization-key.handle
+    elif [ -f "$base_file_path/policy-authorization-key.name" ] && [ -f "$base_file_path/policy-authorization-key.handle" ]; then
+        policy_authorization_key_name="$base_file_path/policy-authorization-key.name"
+        policy_authorization_key_handle="$base_file_path/policy-authorization-key.handle"
     else
         echo "tpm_policy_auth not specified and defaults not available. Falling back to passphrase prompt."
         return 1
     fi
 
-    if [ -f $sealed_key_handle ] && [ -f $policy_authorization_key_name ] && [ -f $policy_authorization_key_handle ]; then
-        tpm2_verifysignature -c $policy_authorization_key_handle -g sha256 -m $base_key_path/authorized-policy.policy -s $base_key_path/authorized-policy.signature -t authorized-policy.tkt
+    # Define some functions to reduce repetition below
+    verify_policy_signature() {
+        tpm2_verifysignature -c $policy_authorization_key_handle -g sha256 -m $authorized_policy -s $authorized_policy_signature -t authorized-policy.tkt
+        return $?
+    }
+
+    create_authorized_policy_session() {
+        tpm2_startauthsession --policy-session -S sealed-auth-session.ctx
+
+        tpm2_policypcr -S sealed-auth-session.ctx -l sha256:0,1,2,3,4,5,7,8,9
+
+        tpm2_policyauthorize -S sealed-auth-session.ctx -i $authorized_policy -n $policy_authorization_key_name -t authorized-policy.tkt
+    }
+
+    create_temporary_authorized_policy_session() {
+        tpm2_startauthsession --policy-session -S sealed-auth-session.ctx
+
+        tpm2_policypcr -S sealed-auth-session.ctx -l sha256:0,1,2,3
+
+        tpm2_policycountertimer -S sealed-auth-session.ctx --eq resets=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p")
+
+        tpm2_policyauthorize -S sealed-auth-session.ctx -i $authorized_policy -n $policy_authorization_key_name -t authorized-policy.tkt
+    }
+
+    unseal_passphrase() {
+        tpm2_unseal -p "session:sealed-auth-session.ctx" -c $sealed_key_handle > /crypto_keyfile.bin
+        return $?
+    }
+
+    if [ -f "$sealed_key_handle" ] && [ -f "$policy_authorization_key_name" ] && [ -f "$policy_authorization_key_handle" ]; then
+        # Check for policy files
+        if [ -f "$base_file_path/authorized-policy.policy" ] && [ -f "$base_file_path/authorized-policy.signature" ]; then
+            authorized_policy="$base_file_path/authorized-policy.policy"
+            authorized_policy_signature="$base_file_path/authorized-policy.signature"
+            verify_policy_signature
+            create_authorized_policy_session
+            unseal_passphrase
+        elif [ -f "$base_file_path/temporary-authorized-policy.policy" ] && [ -f "$base_file_path/temporary-authorized-policy.signature" ]; then
+            authorized_policy="$base_file_path/temporary-authorized-policy.policy"
+            authorized_policy_signature="$base_file_path/temporary-authorized-policy.signature"
+            verify_policy_signature
+            create_temporary_authorized_policy_session
+            unseal_passphrase
+        else
+            echo "Could not find any policy files. Falling back to passphrase prompt."
+            return 1
+        fi
+    else
+        echo ""
+    fi
+
+    # end
+    # below for reference while WIP
+
+    if [ -f "$sealed_key_handle" ] && [ -f "$policy_authorization_key_name" ] && [ -f "$policy_authorization_key_handle" ]; then
+        tpm2_verifysignature -c $policy_authorization_key_handle -g sha256 -m $default_file_path/authorized-policy.policy -s $default_file_path/authorized-policy.signature -t authorized-policy.tkt
 
         tpm2_startauthsession --policy-session -S sealed-auth-session.ctx
 
@@ -72,7 +137,7 @@ EOF
 
         tpm2_policycountertimer -S sealed-auth-session.ctx --eq resets=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p")
 
-        tpm2_policyauthorize -S sealed-auth-session.ctx -i $base_key_path/authorized-policy.policy -n $policy_authorization_key_name -t authorized-policy.tkt
+        tpm2_policyauthorize -S sealed-auth-session.ctx -i $default_file_path/authorized-policy.policy -n $policy_authorization_key_name -t authorized-policy.tkt
 
         tpm2_unseal -p "session:sealed-auth-session.ctx" -c $sealed_key_handle > /crypto_keyfile.bin
 

@@ -16,6 +16,11 @@ run_hook() {
     # make sure the tpm module is loaded
     modprobe -a -q tpm >/dev/null 2>&1
 
+    # ==========================
+    # Collect Input and Validate
+    # ==========================
+
+    # Check if partition is mounted at /efi. Abort if not.
     if ! mountpoint -q "/efi"; then
         echo "tpm2-encrypt could not mount tpm_efi_part partition. Falling back to passphrase prompt."
         return 1 
@@ -61,7 +66,7 @@ EOF
         fi
 
         # Verify both name and handle were set
-        if ! \( [ -f $policy_authorization_key_name ] && [ -f $policy_authorization_key_handle ] \); then
+        if ! \( [ -f "$policy_authorization_key_name" ] && [ -f "$policy_authorization_key_handle" ] \); then
             echo "tpm_policy_auth file names not found and defaults not available. Falling back to passphrase prompt."
             return 1
         fi
@@ -74,51 +79,78 @@ EOF
         return 1
     fi
 
-    # Define some functions to reduce repetition below
+    # Check for tpm_pcr_bank and validate input
+    if [ -n "$tpm_pcr_bank" ]; then 
+        case "$tpm_pcr_bank" in
+            sha1|sha256|sha384|sha512|sm3_256|sha3_256|sha3_384|sha3_512)
+                pcr_bank_alg="$tpm_pcr_bank"
+            ;;
+            *)
+                echo "Unrecognized hash algorithm [$tpm_pcr_bank]. Falling back to passphrase prompt."
+                return 1
+            ;;
+        esac
+    else
+        pcr_bank_alg="sha256"
+    fi
+
+    # ==============================================================
+    # Define functions for tpm operations to reduce repetition below
+    # ==============================================================
+
     verify_policy_signature() {
-        tpm2_verifysignature -c $policy_authorization_key_handle -g sha256 -m $authorized_policy -s $authorized_policy_signature -t authorized-policy.tkt
+        tpm2_verifysignature -c "$policy_authorization_key_handle" -g sha256 -m "$authorized_policy" -s "$authorized_policy_signature" -t authorized-policy.tkt
         return $?
     }
 
     create_authorized_policy_session() {
-        tpm2_startauthsession --policy-session -S sealed-auth-session.ctx
+        ! tpm2_startauthsession --policy-session -S sealed-auth-session.ctx && return $?
 
-        tpm2_policypcr -S sealed-auth-session.ctx -l sha256:0,1,2,3,4,5,7,8,9
+        ! tpm2_policypcr -S sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" && return $?
 
-        tpm2_policyauthorize -S sealed-auth-session.ctx -i $authorized_policy -n $policy_authorization_key_name -t authorized-policy.tkt
-    }
-
-    create_temporary_authorized_policy_session() {
-        tpm2_startauthsession --policy-session -S sealed-auth-session.ctx
-
-        tpm2_policypcr -S sealed-auth-session.ctx -l sha256:0,1,2,3
-
-        tpm2_policycountertimer -S sealed-auth-session.ctx --eq resets=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p")
-
-        tpm2_policyauthorize -S sealed-auth-session.ctx -i $authorized_policy -n $policy_authorization_key_name -t authorized-policy.tkt
-    }
-
-    unseal_passphrase() {
-        tpm2_unseal -p "session:sealed-auth-session.ctx" -c $sealed_key_handle > /crypto_keyfile.bin
+        tpm2_policyauthorize -S sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t authorized-policy.tkt
         return $?
     }
 
+    create_temporary_authorized_policy_session() {
+        ! tpm2_startauthsession --policy-session -S sealed-auth-session.ctx && return $?
+
+        ! tpm2_policypcr -S sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3" && return $?
+
+        ! tpm2_policycountertimer -S sealed-auth-session.ctx --eq resets=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") && return $?
+
+        tpm2_policyauthorize -S sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t authorized-policy.tkt
+        return $?
+    }
+
+    unseal_passphrase() {
+        tpm2_unseal -p "session:sealed-auth-session.ctx" -c "$sealed_key_handle" > /crypto_keyfile.bin
+        return $?
+    }
+
+    # =====================
+    # Unseal the passphrase
+    # =====================
+
+    # Final check of input variables
     if [ -f "$sealed_key_handle" ] && [ -f "$policy_authorization_key_name" ] && [ -f "$policy_authorization_key_handle" ]; then
         # Check for policy files
         if [ -f "$base_file_path/authorized-policy.policy" ] && [ -f "$base_file_path/authorized-policy.signature" ]; then
             authorized_policy="$base_file_path/authorized-policy.policy"
             authorized_policy_signature="$base_file_path/authorized-policy.signature"
-            verify_policy_signature
-            create_authorized_policy_session
-            unseal_passphrase
+            ! verify_policy_signature && echo "" && return 1
+            ! create_authorized_policy_session && echo "" && return 1
+            ! unseal_passphrase && echo "" && return 1
         elif [ -f "$base_file_path/temporary-authorized-policy.policy" ] && [ -f "$base_file_path/temporary-authorized-policy.signature" ]; then
             authorized_policy="$base_file_path/temporary-authorized-policy.policy"
             authorized_policy_signature="$base_file_path/temporary-authorized-policy.signature"
-            verify_policy_signature
-            create_temporary_authorized_policy_session
-            unseal_passphrase
+            ! verify_policy_signature && echo "" && return 1
+            ! create_temporary_authorized_policy_session && echo "" && return 1
+            ! unseal_passphrase && echo "" && return 1
+            # Set some flag to auth a new policy in cleanup...
         else
             echo "Could not find any policy files. Falling back to passphrase prompt."
+            # Set some flag to ask about authing new policy in cleanup...
             return 1
         fi
     else
@@ -143,8 +175,7 @@ EOF
 
         tpm2_flushcontext sealed-auth-session.ctx
 
-        rm sealed-auth-session.ctx
-        rm authorized-policy.tkt
+
     else
         echo ""
     fi
@@ -153,6 +184,8 @@ EOF
 run_cleanuphook() {
     # This is where we will optionally re-seal on the current PCR values.
     # This is done as a cleanup hook to ensure that the root FS is mounted already so we can use the auth key to change the TPM Policy.
+    rm sealed-auth-session.ctx
+    rm authorized-policy.tkt
     umount /efi
 }
 

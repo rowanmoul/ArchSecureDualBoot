@@ -623,10 +623,10 @@ tpm2_startauthsession --hash-algorithm sha256 --session temporary-authorized-pol
 Add the PCR values that we know will not change to the policy:
 
 ```Shell
-tpm2_policypcr --pcr-list sha256:0,1,2,3 --session temporary-authorized-policy.session
+tpm2_policypcr --pcr-list sha256:0,1,2,3,7 --session temporary-authorized-policy.session
 ```
 
-- `--pcr-list sha256:0,1,2,3` specifies the use of PCRs 0-3 from the sha256 bank.
+- `--pcr-list sha256:0,1,2,3,7` specifies the use of PCRs 0-3 and 7 from the sha256 bank.
   - Many TPMs support multiple banks of PCRs that use different algorithms. At minimum there is usually sha1 and sha256. To check what your TPM has allocated, run `tpm2_pcrread`.
   - If your TPM only has sha1, adjust this option accordingly. The `initramfs` script will check for sha256 and use sha1 as a fallback.
 - `--session temporary-authorized-policy.session` specifies the trial session we just created.

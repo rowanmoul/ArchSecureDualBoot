@@ -93,6 +93,10 @@ be asked if you want to create a new authorized policy on the new PCR values
 after unlocking the volume with a password.
 The previous values are signed and verified with the policy authorization key
 to maintain integrity and trust.
+
+NOTE: This hook is most secure when used with signed kernel and initramfs images
+and secure boot turned on. If you cannot trust your initramfs and/or kernel
+image this hook is not secure.
 HELPEOF
 }
 

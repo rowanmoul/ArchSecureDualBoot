@@ -99,53 +99,58 @@ EOF
     # ========================================================
 
     verify_policy_signature() {
-        tpm2_verifysignature -c "$policy_authorization_key_handle" -g sha256 -m "$authorized_policy" -s "$authorized_policy_signature" -t authorized-policy.tkt
+        tpm2_verifysignature -Q -c "$policy_authorization_key_handle" -g sha256 -m "$authorized_policy" -s "$authorized_policy_signature" -t authorized-policy.tkt
         return $?
     }
 
     create_authorized_policy_session() {
-        ! tpm2_startauthsession --policy-session -S sealed-auth-session.ctx && return $?
+        ! tpm2_startauthsession -Q --policy-session -S sealed-auth-session.ctx && return $?
 
-        ! tpm2_policypcr -S sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" && return $?
+        ! tpm2_policypcr -Q -S sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" && return $?
 
-        tpm2_policyauthorize -S sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t authorized-policy.tkt
+        tpm2_policyauthorize -Q -S sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t authorized-policy.tkt
         return $?
     }
 
     create_temporary_authorized_policy_session() {
-        ! tpm2_startauthsession --policy-session -S sealed-auth-session.ctx && return $?
+        ! tpm2_startauthsession -Q --policy-session -S sealed-auth-session.ctx && return $?
 
-        ! tpm2_policypcr -S sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,7" && return $?
+        ! tpm2_policypcr -Q -S sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,7" && return $?
 
-        ! tpm2_policycountertimer -S sealed-auth-session.ctx --eq resets=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") && return $?
+        ! tpm2_policycountertimer -Q -S sealed-auth-session.ctx --eq resets=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") && return $?
 
-        tpm2_policyauthorize -S sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t authorized-policy.tkt
+        tpm2_policyauthorize -Q -S sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t authorized-policy.tkt
         return $?
     }
 
     unseal_passphrase() {
-        tpm2_unseal -p "session:sealed-auth-session.ctx" -c "$sealed_key_handle" > /crypto_keyfile.bin
+        tpm2_unseal -Q -p "session:sealed-auth-session.ctx" -c "$sealed_key_handle" > /crypto_keyfile.bin
         return $?
     }
 
     create_reauthorize_policy() {
-        ! tpm2_startauthsession -S reauthorize-policy-session.ctx && return $?
+        ! tpm2_startauthsession -Q -S reauthorize-policy-session.ctx && return $?
 
-        ! tpm2_policypcr -S reauthorize-policy-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" -L "reauthorize-policy.policy" && return $?
+        ! tpm2_policypcr -Q -S reauthorize-policy-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" -L "reauthorize-policy.policy" && return $?
 
-        tpm2_flushcontext reauthorize-policy-session.ctx
+        tpm2_flushcontext -Q reauthorize-policy-session.ctx
 
         # Also save new pcr values for later comparison
-        tpm2_pcrread "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" > reauthorize-pcr-values.txt
+        tpm2_pcrread -Q "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" > reauthorize-pcr-values.txt
     }
 
     ask_reauthorize_policy() {
-        if ! tpm2_verifysignature -c "$policy_authorization_key_handle" -g sha256 -m "REPLACEME-file" -s "REPLACEME-file-signature"; then
-            echo "Failed to verify signature of previous PCR values. This could be a sign of tampering!"
+        if [ -f "REPLACEME-file" ] && [ -f "REPLACEME-file-signature" ]; then
+            if ! tpm2_verifysignature -Q -c "$policy_authorization_key_handle" -g sha256 -m "REPLACEME-file" -s "REPLACEME-file-signature"; then
+                echo "Failed to verify signature of previous PCR values!"
+            fi
+            echo "The following PCR values have changed since the last time a policy was authorized:"
+            tpm2_pcrread -Q "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" | comm -13 "REPLACEME-file" -
+            echo "If you expected these changes (and any errors that have been printed above), you can authorize a new policy that uses them after entering your passphrase."
+        else
+            echo "Could not find previous PCR values."
+            echo "If you expected this (and any errors that have been printed above), you can authorize a new policy that uses the current values after entering your passphrase. This will also store a signed version of the current values for later comparison."
         fi
-        echo "The following PCR values have changed since the last time a policy was authorized."
-        tpm2_pcrread "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" | comm -13 "REPLACEME-file" -
-        echo "If you expected these changes, you can authorize a new policy that uses them after entering your passphrase."
         echo "Would you like to authorize a new policy? (y/n)"
         read -r yn
         if [ "$yn" = "y" ]; then
@@ -158,19 +163,26 @@ EOF
         if [ -f "$base_file_path/authorized-policy.policy" ] && [ -f "$base_file_path/authorized-policy.signature" ]; then
             authorized_policy="$base_file_path/authorized-policy.policy"
             authorized_policy_signature="$base_file_path/authorized-policy.signature"
-            if verify_policy_signature && create_authorized_policy_session && unseal_passphrase; then
+            if verify_policy_signature && step=1 && create_authorized_policy_session && step=2 && unseal_passphrase && step=3; then
                 # Success!
-                tpm2_flushcontext sealed-auth-session.ctx
+                tpm2_flushcontext -Q sealed-auth-session.ctx
                 return 0
             else
                 # Failed to unseal. Ask about re-auth
-                tpm2_flushcontext sealed-auth-session.ctx
+                if [ "$step" = "1" ]; then
+                    echo "Could not verify authorized policy signature!"
+                elif ["$step" = "2" ]; then
+                    echo "Failed to create authorized policy session!"
+                else
+                    echo "Failed to unseal passphrase with authorized policy!"
+                fi
+                tpm2_flushcontext -Q sealed-auth-session.ctx
                 ask_reauthorize_policy
                 return 1
             fi
         else
             # Could not find policy files. Ask about re-auth
-            tpm2_flushcontext sealed-auth-session.ctx
+            echo "Could not find any authorized policy files!"
             ask_reauthorize_policy
             return 1
         fi
@@ -181,18 +193,26 @@ EOF
         if [ -f "$base_file_path/temporary-authorized-policy.policy" ] && [ -f "$base_file_path/temporary-authorized-policy.signature" ]; then
             authorized_policy="$base_file_path/temporary-authorized-policy.policy"
             authorized_policy_signature="$base_file_path/temporary-authorized-policy.signature"
-            if verify_policy_signature && create_temporary_authorized_policy_session && unseal_passphrase; then
+            if verify_policy_signature && step=1 && create_temporary_authorized_policy_session && step=2 && unseal_passphrase && step=3; then
                 # success!
-                tpm2_flushcontext sealed-auth-session.ctx
+                tpm2_flushcontext -Q sealed-auth-session.ctx
                 create_reauthorize_policy
                 return 0
             else
+                # Failed to unseal with temp policy
+                if [ "$step" = "1" ]; then
+                    echo "Could not verify temporary authorized policy signature!"
+                elif ["$step" = "2" ]; then
+                    echo "Failed to create temporary authorized policy session!"
+                else
+                    echo "Failed to unseal passphrase with temporary authorized policy!"
+                fi
+                tpm2_flushcontext -Q sealed-auth-session.ctx
                 try_unseal_with_authorized_policy && return 0
             fi
         else
             try_unseal_with_authorized_policy && return 0
         fi
-        tpm2_flushcontext sealed-auth-session.ctx
         return 1
     }
 
@@ -203,14 +223,10 @@ EOF
     # Final check of input variables
     if [ -f "$sealed_key_handle" ] && [ -f "$policy_authorization_key_name" ] && [ -f "$policy_authorization_key_handle" ] && [ -n "$pcr_bank_alg" ]; then
         # try to unseal
-        if try_unseal_with_temp_authorized_policy; then
-            return 0
-        else
-            echo "Failed to unseal passphrase. Falling back to passphrase prompt."
-            return 1
-        fi
+        try_unseal_with_temp_authorized_policy
+        return $?
     else
-        echo "An unexpected input error occured. Falling back to passphrase prompt."
+        echo "An unexpected input error occured. Please verify your kernel arguments. Falling back to passphrase prompt."
         return 1
     fi
 }
@@ -222,8 +238,11 @@ run_latehook() {
 }
 
 run_cleanuphook() {
+    tpm2_flushcontext -Q sealed-auth-session.ctx
     rm sealed-auth-session.ctx
     rm authorized-policy.tkt
+    rm reauthorize-policy-session.ctx
+    rm reauthorize-policy-values.txt
     umount /efi
 }
 

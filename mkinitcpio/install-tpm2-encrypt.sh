@@ -20,6 +20,7 @@ build() {
     add_binary "tpm2_policyauthorize"
     add_binary "tpm2_unseal"
     add_binary "tpm2_flushcontext"
+    add_binary "tpm2_sign"
 
     # Add the runtime hooks found in the hooks-tpm2-encrypt file.
     add_runscript

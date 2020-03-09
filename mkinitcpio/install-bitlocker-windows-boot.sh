@@ -3,7 +3,7 @@
 build() {
     local mod
 
-    add_module "efivars"
+    add_module "efivarfs"
 
     add_binary "efibootmgr"
 

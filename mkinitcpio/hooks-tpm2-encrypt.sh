@@ -1,6 +1,9 @@
 #!/usr/bin/ash
 
 run_earlyhook() {
+    # make sure we have modules loaded for filesystems
+    modprobe -a -q fat vfat >/dev/null 2>&1
+
     # make /efi if it doesn't exist
     mkdir /efi
 
@@ -99,53 +102,56 @@ EOF
     # ========================================================
 
     verify_policy_signature() {
-        tpm2_verifysignature -Q -c "$policy_authorization_key_handle" -g sha256 -m "$authorized_policy" -s "$authorized_policy_signature" -t authorized-policy.tkt
+        tpm2_verifysignature -Q -c "$policy_authorization_key_handle" -g sha256 -m "$authorized_policy" -s "$authorized_policy_signature" -t /authorized-policy.tkt
         return $?
     }
 
     create_authorized_policy_session() {
-        ! tpm2_startauthsession -Q --policy-session -S sealed-auth-session.ctx && return $?
+        ! tpm2_startauthsession -Q --policy-session -S /sealed-auth-session.ctx && return $?
 
-        ! tpm2_policypcr -Q -S sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" && return $?
+        ! tpm2_policypcr -Q -S /sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" && return $?
 
-        tpm2_policyauthorize -Q -S sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t authorized-policy.tkt
+        tpm2_policyauthorize -Q -S /sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t /authorized-policy.tkt
         return $?
     }
 
     create_temporary_authorized_policy_session() {
-        ! tpm2_startauthsession -Q --policy-session -S sealed-auth-session.ctx && return $?
+        ! tpm2_startauthsession -Q --policy-session -S /sealed-auth-session.ctx && return $?
 
-        ! tpm2_policypcr -Q -S sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,7" && return $?
+        ! tpm2_policypcr -Q -S /sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,7" && return $?
 
-        ! tpm2_policycountertimer -Q -S sealed-auth-session.ctx --eq resets=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") && return $?
+        ! tpm2_policycountertimer -Q -S /sealed-auth-session.ctx --eq resets=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") && return $?
 
-        tpm2_policyauthorize -Q -S sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t authorized-policy.tkt
+        tpm2_policyauthorize -Q -S /sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t /authorized-policy.tkt
         return $?
     }
 
     unseal_passphrase() {
-        tpm2_unseal -Q -p "session:sealed-auth-session.ctx" -c "$sealed_key_handle" > /crypto_keyfile.bin
+        tpm2_unseal -Q -p "session:/sealed-auth-session.ctx" -c "$sealed_key_handle" > /crypto_keyfile.bin
         return $?
     }
 
     create_reauthorize_policy() {
-        ! tpm2_startauthsession -Q -S reauthorize-policy-session.ctx && return $?
+        ! tpm2_startauthsession -Q -S /reauthorize-policy-session.ctx && return $?
 
-        ! tpm2_policypcr -Q -S reauthorize-policy-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" -L "reauthorize-policy.policy" && return $?
+        ! tpm2_policypcr -Q -S /reauthorize-policy-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" -L /reauthorize-policy.policy && return $?
 
-        tpm2_flushcontext -Q reauthorize-policy-session.ctx
+        tpm2_flushcontext -Q /reauthorize-policy-session.ctx
 
-        # Also save new pcr values for later comparison
-        tpm2_pcrread -Q "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" > reauthorize-pcr-values.txt
+        # Also save new pcr values for comparison in future boots
+        tpm2_pcrread -Q "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" > /reauthorize-pcr-values.txt
+
+        export policy_authorization_key_handle
+        export base_file_path
     }
 
     ask_reauthorize_policy() {
-        if [ -f "REPLACEME-file" ] && [ -f "REPLACEME-file-signature" ]; then
-            if ! tpm2_verifysignature -Q -c "$policy_authorization_key_handle" -g sha256 -m "REPLACEME-file" -s "REPLACEME-file-signature"; then
+        if [ -f "$base_path/authorized-pcr-values.txt" ] && [ -f "$base_path/authorized-pcr-values.signature" ]; then
+            if ! tpm2_verifysignature -Q -c "$policy_authorization_key_handle" -g sha256 -m "$base_path/authorized-pcr-values.txt" -s "$base_path/authorized-pcr-values.signature"; then
                 echo "Failed to verify signature of previous PCR values!"
             fi
             echo "The following PCR values have changed since the last time a policy was authorized:"
-            tpm2_pcrread -Q "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" | comm -13 "REPLACEME-file" -
+            tpm2_pcrread -Q "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" | comm -13 "$base_path/authorized-pcr-values.txt" -
             echo "If you expected these changes (and any errors that have been printed above), you can authorize a new policy that uses them after entering your passphrase."
         else
             echo "Could not find previous PCR values."
@@ -165,18 +171,18 @@ EOF
             authorized_policy_signature="$base_file_path/authorized-policy.signature"
             if verify_policy_signature && step=1 && create_authorized_policy_session && step=2 && unseal_passphrase && step=3; then
                 # Success!
-                tpm2_flushcontext -Q sealed-auth-session.ctx
+                tpm2_flushcontext -Q /sealed-auth-session.ctx
                 return 0
             else
                 # Failed to unseal. Ask about re-auth
                 if [ "$step" = "1" ]; then
                     echo "Could not verify authorized policy signature!"
-                elif ["$step" = "2" ]; then
+                elif [ "$step" = "2" ]; then
                     echo "Failed to create authorized policy session!"
                 else
                     echo "Failed to unseal passphrase with authorized policy!"
                 fi
-                tpm2_flushcontext -Q sealed-auth-session.ctx
+                tpm2_flushcontext -Q /sealed-auth-session.ctx
                 ask_reauthorize_policy
                 return 1
             fi
@@ -195,19 +201,19 @@ EOF
             authorized_policy_signature="$base_file_path/temporary-authorized-policy.signature"
             if verify_policy_signature && step=1 && create_temporary_authorized_policy_session && step=2 && unseal_passphrase && step=3; then
                 # success!
-                tpm2_flushcontext -Q sealed-auth-session.ctx
+                tpm2_flushcontext -Q /sealed-auth-session.ctx
                 create_reauthorize_policy
                 return 0
             else
                 # Failed to unseal with temp policy
                 if [ "$step" = "1" ]; then
                     echo "Could not verify temporary authorized policy signature!"
-                elif ["$step" = "2" ]; then
+                elif [ "$step" = "2" ]; then
                     echo "Failed to create temporary authorized policy session!"
                 else
                     echo "Failed to unseal passphrase with temporary authorized policy!"
                 fi
-                tpm2_flushcontext -Q sealed-auth-session.ctx
+                tpm2_flushcontext -Q /sealed-auth-session.ctx
                 try_unseal_with_authorized_policy && return 0
             fi
         else
@@ -232,17 +238,34 @@ EOF
 }
 
 run_latehook() {
-    # This is where we will optionally re-seal on the current PCR values.
-    # This is done as a late hook to ensure that the root FS is mounted already so we can use the auth key to change the TPM Policy.
-    true
+    # This is where we will optionally re-authorize a policy with the current PCR values.
+    # This is done as a late hook as we need the root FS to be mounted already so we can use the auth key to sign the new policy.
+    # No checks are done here. If these files exist, they will be signed.
+    # If the user is not using secure boot to ensure their initramfs image is not tampered with then this could be a security hole, as
+    # someone could modify the initramfs to insert their own policy with the same filename and it would be signed.
+    if [ -f /reauthorize-policy.policy ]; then
+        mv /reauthorize-policy.policy "$base_path/authorized-policy.policy"
+
+        tpm2_sign -c policy_authorization_key_handle -p file:/new_root/root/keys/policy-authorization-access.bin -g sha256 -s rsapss -o "$base_path/authorized-policy.signature" "$base_path/authorized-policy.policy"
+    fi
+    if [ -f /reauthorize-pcr-values.txt ]; then
+        mv /reauthorize-pcr-values.txt "$base_path/authorized-pcr-values.txt"
+
+        tpm2_sign -c policy_authorization_key_handle -p file:/new_root/root/keys/policy-authorization-access.bin -g sha256 -s rsapss -o "$base_path/authorized-pcr-values.signature" "$base_path/authorized-pcr-values.txt"
+    fi
 }
 
 run_cleanuphook() {
-    tpm2_flushcontext -Q sealed-auth-session.ctx
-    rm sealed-auth-session.ctx
-    rm authorized-policy.tkt
-    rm reauthorize-policy-session.ctx
-    rm reauthorize-policy-values.txt
+    # It's always good to clean up after yourself. Even if this ramdisk is going to be deallocated.
+    tpm2_flushcontext -Q /sealed-auth-session.ctx
+    rm /sealed-auth-session.ctx
+    rm /authorized-policy.tkt
+    tpm2_flushcontext -Q /reauthorize-policy-session.ctx
+    rm /reauthorize-policy-session.ctx
+    rm /reauthorize-policy-values.txt
+    # Either this was used to unseal and re-authorize, or it didn't work. Either way, no need to keep it.
+    rm "$base_file_path/temporary-authorized-policy.policy"
+    rm "$base_file_path/temporary-authorized-policy.signature"
     umount /efi
 }
 

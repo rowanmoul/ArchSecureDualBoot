@@ -6,6 +6,10 @@ build() {
     # Add the tpm kernel module so we can access the tpm
     add_module "tpm"
 
+    # Add filesystem modules for fat and vfat so we can mount the efi partition
+    add_module "fat"
+    add_module "vfat"
+
     # Add the multitude of tpm2-tools needed by this hook. Linked libraries will also be copied automatically.
     add_binary "tpm2_pcrread"
     add_binary "tpm2_verifysignature"
@@ -45,7 +49,7 @@ tpm_efi_part=device
     - 'device' can be a location in /dev or a uuid etc.
     - Refer to documentation for specifying the 'root=device' argument for
       formatting details, but uuid is recommended.
-    - Technicaly you could put any unencrypted partition here.
+    - Technicaly you could put any unencrypted  fat or vfat partition here.
       EFI is just the simplest and should always be available.
 
 optional kernel command line arguments:
@@ -61,7 +65,7 @@ optional kernel command line arguments:
       cannot be speciifed like the key handles below for simplicity.
       Please refer to the initial setup readme for further details.
     - If this argument is not specified, the hook will use
-      /EFI/arch/tpm2-encrypt on the given partition as the default.
+      "/EFI/arch/tpm2-encrypt" on the given partition as the default.
 
 tpm_sealed_key=handle
     - Specifies the sealed TPM object's location in the TPM NVRAM.

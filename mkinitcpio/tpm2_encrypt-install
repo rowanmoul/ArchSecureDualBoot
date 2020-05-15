@@ -4,7 +4,8 @@ build() {
     local mod
 
     # Add the tpm kernel module so we can access the tpm
-    add_module "tpm"
+    add_module "tpm_crb"
+    add_module "tpm_tis"
 
     # Add filesystem modules for fat and vfat so we can mount the efi partition
     add_module "fat"
@@ -21,6 +22,10 @@ build() {
     add_binary "tpm2_unseal"
     add_binary "tpm2_flushcontext"
     add_binary "tpm2_sign"
+    add_binary "/usr/lib/libtss2-tcti-device.so"
+
+    add_binary "comm"
+    add_binary "sort"
 
     # Add the runtime hooks found in the hooks-tpm2-encrypt file.
     add_runscript

@@ -1,0 +1,11 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = grub
+
+[Action]
+Description = Adding Windows boot entry to GRUB menu...
+When = PostTransaction
+Exec = /usr/bin/patch /etc/grub.d/10_linux /etc/pacman.d/scripts/grub-10_linux-add-windows-boot-entry.patch
+Depends = patch

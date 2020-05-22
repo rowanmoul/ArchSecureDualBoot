@@ -24,10 +24,11 @@ build() {
     add_binary "tpm2_sign"
     add_binary "/usr/lib/libtss2-tcti-device.so"
 
+    # Add two small binaries needed for showing which PCR values have changed when unsealing fails.
     add_binary "comm"
     add_binary "sort"
 
-    # Add the runtime hooks found in the hooks-tpm2-encrypt file.
+    # Add the runtime hooks found in the hooks/tpm2_encrypt file.
     add_runscript
 }
 
@@ -47,7 +48,7 @@ with an authorization key. Intial setup is too lengthy for this help text.
 Please refer to the readme in this repo:
 https://github.com/rowanmoul/ArchSecureDualBoot
 
-required kernel command line arguments:
+Required kernel command line arguments:
 
 tpm_efi_part=device
     - Must be specified on the kernel command line in order to access
@@ -58,7 +59,7 @@ tpm_efi_part=device
     - Technicaly you could put any unencrypted  fat or vfat partition here.
       EFI is just the simplest and should always be available.
 
-optional kernel command line arguments:
+Optional kernel command line arguments:
 
 'tpm_file_dir=directory'
     - Specifies the directory in which to look for files needed by this hook
@@ -104,7 +105,7 @@ after unlocking the volume with a password.
 The previous values are signed and verified with the policy authorization key
 to maintain integrity and trust.
 
-NOTE: This hook is most secure when used with signed kernel and initramfs images
+NOTE: This hook is secure when used with signed kernel and initramfs images
 and secure boot turned on. If you cannot trust your initramfs and/or kernel
 image this hook is not secure.
 HELPEOF

@@ -1,0 +1,19 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = grub
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = /usr/lib/modules/*/vmlinuz
+
+
+[Action]
+Description = Re-installing GRUB after update...
+When = PostTransaction
+Exec = /etc/pacman.d/scripts/tpm2-encrypt-create-temporary-policy
+Depends = grub
+Depends = efibootmgr

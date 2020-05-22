@@ -1,0 +1,40 @@
+#!/bin/bash
+
+build() {
+    local mod
+
+    add_module "efivarfs"
+
+    add_binary "efibootmgr"
+
+    add_runscript
+}
+
+help() {
+    cat <<HELPEOF
+This hook can be used to create a bootloader menu entry that boots Windows
+in a manner that will not break TPM backed Bitlocker encryption.
+It sets the EFI bootnext variable to 0000 (The default location for Windows'
+efi boot entry) and reboots the computer, thereby taking your linux bootloader
+out of the equation entirely.
+
+Required kernel command line arguments:
+
+
+boot_windows=1
+    - Without this argument, the hook will do absolutely nothing.
+    - This allows the hook to be safely added to any initramfs with minimal 
+      impact on image size and zero impact on the function of your linux boots
+      using the same image.
+    - Just duplicate your linux entry in the bootloader menu and add
+the argument to activate it.
+
+Optional kernel command line arguments:
+
+win_boot_entry=1234
+    - If your Windows boot entry is not 0000, specify a different number
+      on the kernel command line with the correct 4 digit entry number
+HELPEOF
+}
+
+# vim: set ft=sh ts=4 sw=4 et:

@@ -63,10 +63,13 @@
       - [Update GRUB to include necessary kernel command line arguments](#update-grub-to-include-necessary-kernel-command-line-arguments)
     - [Automating Update and Install tasks with Pacman Hooks](#automating-update-and-install-tasks-with-pacman-hooks)
       - [Pacman hooks](#pacman-hooks)
-      - [Automatically updating GRUB](#automatically-updating-grub)
-      - [Automatically creating a temporary policy](#automatically-creating-a-temporary-policy)
-      - [Windows Grub Entry](#windows-grub-entry)
+      - [Install the hooks](#install-the-hooks)
+        - [GRUB updates](#grub-updates)
+        - [tpm2-encrypt-create-temporary-policy](#tpm2-encrypt-create-temporary-policy)
+      - [Trigger the hooks](#trigger-the-hooks)
   - [Configuring Secure Boot](#configuring-secure-boot)
+    - [What is Secure Boot?](#what-is-secure-boot)
+    - [Reasons to use Secure Boot](#reasons-to-use-secure-boot)
     - [Generating New Secure Boot Keys](#generating-new-secure-boot-keys)
       - [Generate the keys](#generate-the-keys)
     - [Converting the certificates to EFI signature list format](#converting-the-certificates-to-efi-signature-list-format)
@@ -168,6 +171,8 @@ The kernel has a built in resource manager at `/dev/tpmrm0` but it is not as ful
 
 This guide wasn't originally going to include Arch Installation steps, but it is easiest to set all this up while doing a fresh install. Only steps that are not part of a typical install will be covered in detail. Everything else will be listed in brief only. See the [Official Install Guide](https://wiki.archlinux.org/index.php/Installation_guide) for details. Further, these steps will only install the bare minimum needed to boot Arch and do everything outlined in this guide.
 
+*If you already have a running Arch system, just check the list of packages to install below and make sure you aren't missing any, then skip ahead to the next section.*
+
 ### Pre Installation
 
 See [Pre Installation](https://wiki.archlinux.org/index.php/Installation_guide#Pre-installation).
@@ -191,7 +196,7 @@ We will be using this example partition map in the below commands. **Make sure y
 
 ### Setting up the Disk Encryption
 
-The next step is to set up disk encryption for your Linux partition. This will not be true full disk encryption because we will only be encrypting the Linux partition, but since our windows partition is encrypted with BitLocker, nearly the whole drive ends up being encrypted, just with different keys. We will not be encrypting the efi system partition, instead relying on secure boot signing and PCR measurements to prevent tampering. If you want an encrypted efi partition that is beyond the scope of this guide, but there are guides available that can help with this.  
+The next step is to set up disk encryption for your Linux partition. This will not be true *full disk* encryption because we will only be encrypting the Linux partition, but since our windows partition is encrypted with BitLocker, nearly the whole drive ends up being encrypted, just with different keys. We will not be encrypting the efi system partition, instead relying on secure boot signing and PCR measurements to prevent tampering. If you want an encrypted efi partition that is beyond the scope of this guide, but there are guides available that can help with this.  
 For the purposes of this guide, we will only be encrpyting a single partition, with the assumption that your entire Linux system is on that partion, rather than having separate partitions for directories like `/home` which aren't necessary in most single-user cases.
 
 #### dm-crypt, LUKS, and cryptsetup
@@ -409,8 +414,10 @@ systemctl enable tpm2-abrmd
 
 ## Sealing your LUKS Passphrase with TPM 2.0
 
-Please note that all file extensions used in this section with `tpm2_*` commands are purely for readability.  
-That said, any files that are saved for later use should retain their names as used here. The install and boot hooks we will be adding expect those files to have the names used here.
+In this section we will securely store a LUKS passphrase in the TPM so that we can use it later to automatically unlock our disk. The setup described here only has to happen once, and in the next section we will be automating the maintenance of everything.
+
+*Please note that all file extensions used in this section with `tpm2_*` commands are purely for readability.  
+That said, any files that are saved for later use should retain their names as used here. The install and boot hooks we will be adding expect those files to have the names used here.*
 
 ### Mount a Ramfs as a working directory
 
@@ -695,13 +702,13 @@ chmod 400 /root/keys/sealed-passphrase.handle
 
 ### Creating an authorized policy to unseal the LUKS passphrase on boot
 
-At this point we have sealed the LUKS passphrase in a TPM object that is restricted with a policy that must be satisfied by another policy that is authorized (signed) with a key. In order to statisfy this policy, we must create a second policy and sign it. The second policy will be created such that it is satisfied only if the values of certain PCRs are the same as when the policy was created. However, since we are still running on a live disk (if you have been following this guide from the beginning), the current values of most of the PCRs are not the ones that will be found on our new Arch system. There are a few that can be expected not to change in most cases, such as PCR 0, which is the BIOS code, but creating a signed policy that is satisfied by only a few PCR values leaves our sealed LUKS passphrase vulnerable if anyone ever got ahold of that policy.
+At this point we have sealed the LUKS passphrase in a TPM object that is restricted with a policy that must be satisfied by another policy that is authorized (signed) with a key. In order to statisfy this policy, we must create a second policy and sign it. The second policy will be created such that it is satisfied only if the values of certain PCRs are the same as when the policy was created. However, since we are still running on a live disk (if you have been following this guide from the beginning), the current values of most of the PCRs are not the ones that will be found on our new Arch system. There are a few that can be expected not to change in this case, such as PCR 0, which is the BIOS code, but creating a signed policy that is satisfied by only a few PCR values leaves our sealed LUKS passphrase vulnerable if anyone ever got ahold of that policy.
 
-Since we need the policy at early boot, it is easiest to store it in the EFI system partition, just as we did with the handles for the two objects we saved in the TPM. As long as the policy is strong, this is secure because the policy file is nothing more than a digest (of PCR values in this case). The user must re-create the policy with a real authorization session, after which the TPM will compare the two digests. The policy is satisfied if they match. Normally a policy is stored as part of the TPM object, however this one is stored in a file because it will be used to satisfy the wildcard policy that is stored in the TPM object. Since the policy is accompanied by a signature from the authorization key, nobody can tamper with it without causing the signature to fail verification. However if the policy is weak (such as by only requiring a couple PCR values), then there is no need for tampering since it will be easy to satisfy while making malicious changes to other parts of the boot configuration.
+Since we need the policy at early boot, it is easiest to store it in the EFI system partition, just as we did with the handles for the two objects we saved in the TPM. As long as the policy is strong, this is secure because the policy file is nothing more than a digest (of PCR values in this case). The user (or the automated script we will be using later) must re-create the digest with a real authorization session by adding the same PCR values that went into the original, after which the TPM will compare the two digests. The policy is satisfied if they match. Normally a policy is stored as part of the TPM object, however this one is stored in a file because it will be used to satisfy the wildcard policy that is stored in the TPM object. Since the policy is accompanied by a signature from the authorization key, nobody can tamper with it without causing the signature to fail verification. However if the policy is weak (such as by only requiring a couple PCR values), then there is no need for tampering since it will be easy to satisfy while making malicious changes to other parts of the boot configuration.
 
-To mitigate this vulnerbility while also maintaining convenience, we can create a temporary policy that will only work on the next boot, and never again afterward. This is possible because the TPM has an internal 32-bit counter that is incremented on every boot, never decremented, and can't be reset without running `tpm2_clear` which requires authorization and would also clear our sealed key from the TPM (see previous section about the Dictionary Attack Lockout Authorization). We can create a policy that includes a requirement that the value of the boot counter be exactly one plus the current value such that it can only be satisfied on the next boot (in addition to a couple PCR values that we do not expect to change under most circumstances, like PCR 0, which measures the BIOS code).
+To mitigate this vulnerbility while also maintaining convenience, we can create a temporary policy that will only work on the next boot, and never again afterward. This is possible because the TPM has an internal 32-bit counter that is incremented on every boot, never decremented, and can't be reset without running `tpm2_clear` which requires authorization and would also clear our sealed key from the TPM (see previous section about the Dictionary Attack Lockout Authorization). We can create a policy that includes a requirement that the value of the boot counter be exactly one plus the current value such that it can only be satisfied on the next boot (in addition to a couple PCR values that we do not expect to change under most circumstances, like PCR 0).
 
-This strategy will also be used whenever we install an upate for the kernel or the boot loader, though it will be done automatically in install hooks that we will setup later. Whenever we boot, an `initramfs` script (also to be setup later) will look first for a "more secure" policy to use, and failing that (such as when we install a kernel update), it will look for a temporary policy as described above. If this temporary policy is satisfied then it will automatically create a new "more secure" policy with the new PCR values that incorporate the updated kernel. We can take advantage of this automated policy creation in our initial setup too, by manually creating a temporary policy and then letting the `initramfs` script automatically create the "more secure" policy when we reboot into our new arch system for the first time.
+This strategy will also be used whenever we install an upate for the kernel or the boot loader, though it will be done automatically in install hooks that we will setup later. Whenever we boot, an `initramfs` script (also to be setup later) will look first for a "more secure" policy that works, and failing that (such as when we install a kernel update), it will look for a temporary policy as described above. If this temporary policy is satisfied then it will automatically create a new "more secure" policy with the new PCR values that incorporate the updated kernel (once it unlocks the disk with the temporary policy and gains access to the signing key). We can take advantage of this automated policy creation in our initial setup too, by manually creating a temporary policy now and then letting the `initramfs` script automatically create the "more secure" policy when we reboot into our new arch system for the first time.
 
 #### Create a temporary policy
 
@@ -798,12 +805,12 @@ The runtime hook can define up to four different shell functions that are run at
 
 #### Adding the hooks to the initramfs
 
-To "install" these custom hooks on your system, simply copy them to `/etc/initcpio/install/` or `/etc/initcpio/hooks/` as appropriate.
+To "install" these custom hooks on your system, simply copy them to `/etc/initcpio/install/` or `/etc/initcpio/hooks/` as appropriate and ensure they have the executable flag (`chmod +x`).
 
 ##### tpm2_encrypt
 
 For `tpm2_encrypt` there are comments throughout the runtime hook file (or otherwise very descriptive names), as well as an extensive helptext in its install file, so how it works will not be explained in great detail here.  
-To summarize, it looks for the files that we copied to our efi partition earlier and uses them to build a real authorization session and unseal the LUKS passphrase that we previously sealed in the TPM. It has a lot of checks for input errors (kernel arguments), will offer to create a new authorized policy (after you have entered your passphrase manually) if something fails, and will even show you which PCR values changed if it fails to unseal the passphrase. If you have a temporary authorized policy like we created earlier, it will create a new authorized policy without asking (assuming it is able to unseal the passphrase with that temporary policy).  
+To summarize, it looks for the files that we copied to our efi partition earlier and uses them to build a real authorization session and unseal the LUKS passphrase that we previously sealed in the TPM. It has a lot of checks for input errors (kernel arguments), and will offer to create a new authorized policy (after you have entered your passphrase manually) if something fails. It will even show you which PCR values changed if it fails to unseal the passphrase so you can make an informed decsion about whether you expected those changes before entering your passphrase manually. If you have a temporary authorized policy like we created earlier, it will create a new "more secure" authorized policy without asking (assuming it is able to unseal the passphrase with that temporary policy).  
 Please look at the source to learn more. In particular, do not neglect to read the help text, as it contains critical information regarding kernel command line arguments needed for it to work.
 
 To add `tpm2_encrypt` to your initramfs image, simply edit `mkinitcpio.conf` to include it in `HOOKS`. Please note that as mentioned in the help text for this hook, it is written as an extension for the `encrypt` hook that is installed as part of the `cryptsetup` package. The `encrypt` hook has it's own setup requirements (kernel command line arguments) found [here](https://wiki.archlinux.org/index.php/Dm-crypt/System_configuration#Boot_loader), and should be placed *after* `tpm2_encrypt` in `HOOKS`.  
@@ -812,7 +819,7 @@ Hooks are run in the order listed in the config file for each of the four parts 
 
 ##### bitlocker_windows_boot
 
-This hook needs a little more explanation as to why it is needed, although the actual implementation is extremely straightforward and again will not be discussed in detail. Just look at the hook files.
+This hook needs a little more explanation as to why it is needed, although the actual implementation is extremely straightforward and again will not be discussed in detail. Just look at the hook file, it's only a couple lines.
 
 The typical way to dual boot Windows and linux with GRUB is to chain-load the windows boot loader from GRUB. The problem with this approach is that if you are using TPM based bitlocker on Windows and you update GRUB the PCR measurements for GRUB would change, which would break bitlocker.  
 To get around this we can add another hook to our initramfs that will set the EFI boot-next\* variable to the Windows boot entry and then reboot before fully initializing Linux. This way, Windows always boots the same way - directly from the Windows boot manager, without even needing to know that GRUB exists. If Windows wants to update it's own boot manager, it already has a process for re-sealing the Bitlocker key in the TPM (similar in result to the proccess we are setting up for linux involving the temporary authorized policies, but probably implemented completely differently).  
@@ -824,18 +831,19 @@ Add `bitlocker_windows_boot` the same way you added the first hook. Edit `/etc/m
 
 #### Update the iniramfs image with the new hooks
 
-Now that the hooks have been added to the correct folders, and the config file, we need to re-generate a new image that includes these hooks.  
+Now that the hooks have been added to the correct folders, and the config file, we need to generate a new initramfs image that includes these hooks.  
 To do this, simply run
 
 ```Shell
 mkinitcpio -p linux
 ```
 
-- `-p linux` specifies the "linux" preset which was generated from the tempate when the `linux` package (the default kernel package in Arch Linux) was installed. If you are using a different kernel or preset, adjust accordingly.
+- `-p linux` specifies the "linux" preset.
+  - This preset was generated from the tempate when the `linux` package (the default kernel package in Arch Linux) was installed. If you are using a different kernel or preset, adjust accordingly.
 
 #### Update GRUB to include necessary kernel command line arguments
 
-If you read the help text for `tpm2_encrypt` and/or the requirements for the `encrypt` hook then you know there are a few required command line arguments for these two hooks to work correctly. These arguments need to be added to our GRUB menu entries so they are passed to the kernel at boot. To do this, we need to update `/etc/default/grub` to include these arguments in `GRUB_CMDLINE_LINUX_DEFAULT`. The exact arguments needed are left for you to determine using the documentation provided, however here are example arguments based on the setup used in this guide:  
+If you read the help text for `tpm2_encrypt` and/or the requirements for the `encrypt` hook then you know there are a few required command line arguments for these two hooks to work correctly. These arguments need to be added to our GRUB menu entries so they are passed to the kernel at boot. To do this, we need to update `/etc/default/grub` to include these arguments in `GRUB_CMDLINE_LINUX_DEFAULT`. The exact arguments needed are left for you to determine using the documentation provided, however here are example arguments based on the setup in this guide:  
 `tpm_efi_part=/dev/sda2 cryptdevice=UUID=the-uuid-of-my-luks-partition:cryptroot`  
 There are many more optional arguments for `tpm2_encrypt` that are meant to provide flexibilty without having to change the code in the hook, but we are sticking to the defaults here.
 This is also in addition to any other kernel arguments you may want to add that are actually related to the kernel, such as the log level or the quiet flag.
@@ -844,50 +852,68 @@ This is also in addition to any other kernel arguments you may want to add that 
 
 ### Automating Update and Install tasks with Pacman Hooks
 
-Whenever we update our kernel or boot loader, the PCR measurements for those components will change. This means that any policy we have created that relies on the previous values will no longer work. To get around this, we can create a temporary policy (as discussed in detail above) that excludes those PCR values for a single boot cycle. This, along with some other useful tasks, can be done automaticlly with a pacman transaction hook so that we don't even have to think about it.
+Whenever we update our kernel or boot loader (or even just the bootloader config), the PCR measurements for those components will change. This means that any policy we have created that relies on the previous values will no longer work. To get around this, we can create a temporary policy (as discussed in detail above) that excludes those PCR values for a single boot cycle. This, along with some other useful tasks, can be done automaticlly with pacman transaction hooks so that we don't even have to think about it.
 
 #### Pacman hooks
 
 Pacman hooks, also known as [alpm-hooks](https://www.archlinux.org/pacman/alpm-hooks.5.html), are a super easy way to automate parts of package management that would otherwise have to be done manually. Sometimes the Arch Linux developers install hooks with a package, such as with `mkinitcpio`, where the hook automatically re-generates your initramfs images after updating either the kernel or any of the mkinitcpio hooks you have installed via pacman.
 
-Further reading about hooks is mostly left to you (everything you need to know is in the above manpage), however it should be noted that it appears that the default pacman hooks directory is `/etc/pacman.d/hooks` *not* the `/usr/local/etc/pacman.d/hooks` directory mentioned on the man page. This directory is where custom hooks should go. Hooks installed by packages should go in the system hooks directory `/usr/local/share/libalpm/hooks/` (you can also look here to see what hooks are already installed).
+Further reading about hooks is mostly left to you (everything you need to know is in the above manpage), however it should be noted that it appears that the default pacman hooks directory is `/etc/pacman.d/hooks` *not* the `/usr/local/etc/pacman.d/hooks` directory mentioned on the man page. This directory is where custom hooks should go. Hooks installed by packages should go in the system hooks directory `/usr/local/share/libalpm/hooks/` (If you want to see how that `mkinitcpio` hook mentioned above works, look for it here).
 
-#### Automatically updating GRUB
+#### Install the hooks
 
-Before getting into creating a temporary policy in a hook, we need to address another issue that is slightly related: updating the `grub` package does not trigger a re-install of the GRUB boot image on your efi partition. This was probably a very conscious choice on the part of the Arch Linux maintainers. Everyone has their own slightly different setup, be it different partition scheme, or a non-standard install location, and auto-installing grub for everyone would probably cause more problems that it solves. That said, what is the point of updating the package if the image we are booting with isn't getting updated? Plus, who wants to rememeber to run `grub-install` every time with the right arguments? Lets add a hook to fix this!
+In this repo you will find a folder called `/alpm-hooks/`, which contains a number of hooks and supporting scripts written for this guide. At this point there are four hooks that we are going to look at. Three are related to `grub` and the fourth is `tpm2-encrypt-create-temporary-policy.hook`. The other hooks you will find are related to secure boot and will be addressed once we have set that up in the next part of this guide.
 
-In this repo you will find a folder called `/alpm-hooks/`, which contains a number of hooks and supporting scripts written for this guide. The one for this section is called `grub-1-install.hook`. It is an extremely simple hook that just calls `grub-install` with the same arguments that we used earlier when we first installed it. If your installtation is different, you'll want to update the hook accordingly. There is also another hook called `grub-3-generate-configuration.hook` that will automatically re-generate the configuration file by calling `grub-mkconfig`.
+To "install" these hooks simply copy them to `/etc/pacman.d/hooks` or `/etc/pacman.d/scripts` as appropriate (you may have to create these folders), and ensure they all have the executable flag (chmod +x). They will automatically be called whenever you update or install packages with pacman and the events that trigger them occur.
 
-You will undoubtedly also see a third file starting with `grub-2-`. That file will be addressed in an upcomming section but you can install it now if you like. The numbers in the names are there because pacman hooks are run in alphabetical order and this alows the order to they run in to more easily be controlled.
+##### GRUB updates
 
-To "install" these hooks, simply copy them to `/etc/pacman.d/hooks` (you may need to create that directory). They will automatically run the next time you install or upgrade the `grub` package.
+Before getting into creating a temporary policy in a hook, we need to address another issue that is slightly related: updating the `grub` package does not trigger a re-install of the GRUB boot image on your efi partition, nor does it regenrate the configuration. This was probably a very conscious choice on the part of the Arch Linux maintainers. Everyone has their own slightly different setup, be it different partition scheme, or a non-standard install location, and auto-installing grub for everyone would probably cause more problems that it solves. That said, what is the point of updating the package if the image we are booting with isn't getting updated? Plus, who wants to rememeber to run `grub-install` and `grub-mkconfig` every time with the right arguments? Lets add some hooks to fix this!
 
-#### Automatically creating a temporary policy
+The first hook is called `grub-1-install.hook`. It is an extremely simple hook that just calls `grub-install` with the same arguments that we used earlier when we first installed it. If your installtation is different, you'll want to edit the hook accordingly. There is also another hook called `grub-3-generate-configuration.hook` that will automatically re-generate the configuration file by calling `grub-mkconfig` the same way we did eariler. Again, edit this hook if your system is different. The third hook is called `grub-2-patch-add-windows-boot-entry.hook`, and it needs a little more explanation. Before we get into that, it's worth noting that the numbers in the names are there because pacman hooks are run in alphabetical order so naming them this way controls the order that they will run in.
 
-To automatically create a temporary policy when updating the kernel or bootloader, there is another hook in the `/alpm-hooks/` directory called `tpm2-encrypt-create-temporary-policy`. This hook also has an accompanying script in the scripts folder. Similar to the `tpm2_encrypt` hook for `mkinitcpio` we will not be going into great detail on how it works here. The main parts were covered when we manually created a temporary policy above, and there are also comments throughout the script portion of the hook.  
+That third hook (second if you are going by the numbering in the names) adds a GRUB menu entry that will boot our initramfs with the "magic" kernel argument that will activate the initramfs hook `bitlocker-windows-boot`. To do this manually, you could modify `/etc/grub.d/10_linux` and add a "linux" menu entry called "Windows 10" to your grub menu. Why do it this way rather than putting it in `/etc/grub.d/40_custom` where it probably belongs? Well this boot entry is based on the same initramfs image that grub automatically finds and creates entries for in `10_linux` and it's nice to take advantage of all that logic. There's only one problem: `10_linux` is overwritten every time the `grub` package is installed. Enter `grub-2-patch-add-windows-boot-entry.hook`.
+
+This hook will re-patch `/etc/grub.d/10_linux` to include the Windows entry whenever `grub` is updated. It uses a simple patch file found in the `scripts` folder. If you look at the patch you will see that it adds a single line to the file right after the main linux menu entry.  
+So why not just duplicate `10_linux` and give it a different name like `11_windows` to add this entry? Then there would be an entire custom script to maintain that duplicates a lot of logic. By patching the existing file we can take advantage of any updates from the grub maintainers, since the patch only adds one line that calls a function defined earlier in the file. It is unlikely that it will change so drastically in the near future so that the patch no longer works. If it does, you can probably come back and find an updated one here.
+
+These three hooks could absolutely be combined into a single hook. They haven't been to allow you to simply not install `grub-2-patch-add-windows-boot-entry.hook` if you aren't dual booting with Windows.
+
+##### tpm2-encrypt-create-temporary-policy
+
+To automatically create a temporary policy when updating the kernel or bootloader, there is a hook called `tpm2-encrypt-create-temporary-policy`. This hook also has an accompanying script in the scripts folder. Similar to the `tpm2_encrypt` hook for `mkinitcpio` we will not be going into great detail on how it works here. The main parts were covered when we manually created a temporary policy in the previous part of this guide, and there are also comments throughout the script portion of the hook.  
 The main thing to point out here is that this hook has two trigger sections, meaning it can be tiggered by more than one event. In this case, it is triggered by an update to either the kernel or to GRUB, both of which already trigger other hooks to update their binaries in the efi partition.  
-Again, to "install" this hook simply copy it to `/etc/pacman.d/hooks` and copy the script of the same name to `/etc/pacman.d/scripts` (which you will probably have to create).
 
-#### Windows Grub Entry
+#### Trigger the hooks
 
-Now we need to add a GRUB menu entry that will boot our initramfs with the "magic" kernel argument that will activate this new hook. To do this, you can modify `/etc/grub.d/10_linux` and add a "linux" menu entry called "Windows" to your grub menu. Why do it this way rather than putting it in `/etc/grub.d/40_custom` where it probably belongs? Well this boot entry is based on the same initramfs image that grub automatically finds and creates entries for in `10_linux` and it's nice to take advantage of that. There's only one problem: `10_linux` is overwritten every time the `grub` package is installed. More pacman transaction hooks to the rescue!
-
-There is a pacman hook in this repo called `grub-patch-add-windows-boot-entry.h` which will re-patch `/etc/grub.d/10_linux` to include the Windows entry whenever `grub` is updated. It uses a simple patch file of the same name in the `scripts` folder. If you look at the patch you will see that it adds a single line to the file right after the main linux menu entry.
-
-Why not just duplicate `10_linux` and give it a different name like `11_windows` to add this entry? Then there would be an entire custom script to maintain. By patching the existing file we can take advantage of any updates from the grub maintainers, since the patch only adds one line that calls a function defined earlier in the file. It is unlikely that it will change so drastically in the near future so that the patch no longer works.
-
-To "install" this hook, copy the hook file to `/etc/pacman.d/hooks` and the patch file to `/etc/pacman.d/scripts`.  
-Finally, re-install `grub` with pacman to trigger the hook and patch the file. This will also update the grub configuration with the hook we added earlier, creating the new entry to the menu.
+With all the hooks "installed", re-install `grub` with pacman to trigger the hooks and update the grub config with all the kernel arguments we added, as well as add the Windows boot entry. This will also trigger the other hook to re-create the temporary policy we made earlier, but it was still good to go through that to better understand how this all works.
 
 ## Configuring Secure Boot
 
-The first step is to take control of secure boot on your machine by replacing the secure boot certificates with your own, while retaining the default keys so you can still secure boot windows and get firmware updates.  
-It is recommended to read at least the first portion of [Rod's Guide to Controlling Secure Boot](http://www.rodsbooks.com/efi-bootloaders/controlling-sb.html) before proceeding to get a background on how secure boot works.
-Another excellent resource is [This Guide from the Gentoo Wiki](https://wiki.gentoo.org/wiki/Sakaki%27s_EFI_Install_Guide/Configuring_Secure_Boot). Both are guides similar to this one. Feel free to use them instead of this one if they work for you. In particular, this guide only describes one pathway and set of tools to configure secure boot (though it is the pathway that will hopefully work in the most cases). If it doesn't work for your hardware/firmware, the linked guides have other methods that may work.  
 This section can be completed either using an Arch Linux live disk, or an already installed Arch Linux system. You are responsible for installing any needed packages (if you've been following from the beginning you already have everything), and for ensuring the security of your private keys (to be generated below).
+
+### What is Secure Boot?
+
+Secure Boot is a UEFI system that prevents the execution of unsigned EFI binaries, such as OS bootloaders. It does this by maintaining a certificate registry that each EFI binary's signature is checked against. If there is no match then it cannot execute, thereby providing some level of certainty that binaries running are "trusted". That said, it is probably better to think of Secure Boot as a file integrity tool rather than one that prevents "untrusted" EFI binaries from running. The reason for this is that nearly every computer in the world comes with Microsoft's Secure Boot keys pre-installed. These keys are controlled by Microsoft and used to sign Windows bootloaders, but they have also been used to sign other EFI binaries such as one called `shim` which can effectively allow any other EFI binary to run without having to be signed by Microsoft (though this does require physical precence to install an alternate certificate that `shim` will use to verify signatures), making it only partly effective.
+
+Before getting any deaper into a discussion for or against secure boot, read at least the first two sections of [Rod's Guide to Controlling Secure Boot](http://www.rodsbooks.com/efi-bootloaders/controlling-sb.html) before proceeding to get a better background on how secure boot works.  
+Another excellent resource is [This Guide from the Gentoo Wiki](https://wiki.gentoo.org/wiki/Sakaki%27s_EFI_Install_Guide/Configuring_Secure_Boot).
+Both are guides similar to this guide in that they will show you how to take control of secure boot. Feel free to use them instead of this one if they work for you. In particular, this guide only describes one pathway and set of tools to configure secure boot (though it is the pathway that will hopefully work in the most cases). If it doesn't work for your hardware/firmware, those guides have other methods that may work.  
+If you do follow one of those guides instead, make sure to come back here for the final section where we set up some more pacman hooks to automate the signing of our kernel and other binaries.
+
+### Reasons to use Secure Boot
+
+If "Secure" Boot isn't really all that secure, then why use it? On it's own, using Secure Boot with Microsoft's keys installed isn't all that secure for the reasons outlined above. If you aren't dual booting Windows you can delete the Microsoft keys and secure boot becomes extremely effective, as you have complete control over what gets signed. Technically you could do that and then sign your Windows bootloader with your own key, but that would get tedious fast and is very likely to break some part of Windows Update which we can't just add hooks to like Pacman.
+
+Chances are though, that you are wanting to dual boot with Windows. In that case, you might be wondering if it's worth bothering with after reading more about it at the links above. With everything accomplished so far you can definitely walk away with a working system that automatically unlocks your encrypted disk on boot, and is generally quite secure. That being said, there is at least one major hole in the system that can be mostly filled by using secure boot, and that is the use of the temporary policy on kernel updates and similar. Technically if you did an update and then shutdown your computer without turning it back on immediately that temporary policy is still sitting there valid and ready to unseal your LUKS passphrase. If someone got ahold of your computer in this state they could modify or replace your kernel, bootloader, and/or initramfs with a malicious copies and `tpm2_encrypt` would happily create a new authorized policy incorporating PCR measurements of these malicious files. Secure Boot doesn't aleviate this problem, but it adds another layer that an attacker has to get through. By requiring the kernel image, grub image, and initramfs to be signed by a "trusted" key, secure boot acts as a data integrity tool that provides a reasonable level of certainty that these critical early boot files have not been tampered with or replaced since you last shut down. Sure you could just remember to reboot immediately after a system update (and you should), but that's not completely the point.
+
+At the end of the day, "invisible" security systems like the setup described here in this guide will never be completely secure. You sacrifice some of that security to convenience. This comes back to determining what your real threat model actually is, and then determining how secure you actually need your computer to be to protect you based on that.
+
+Assuming you are still here, the first step to take control of secure boot on your machine is to replacing the secure boot certificates with your own. In this guide we will be retaining the default keys so you can still boot Windows and get firmware updates with secure boot on. If you have decided not to retain those keys it should be easy to skip the relevant sections.
 
 ### Generating New Secure Boot Keys
 
+Assuming you have read up on secure boot by now, you know about the different kinds of keys.  
 To generate a new Platofrm Key (PK), Key Exchange Key (KEK), and Database Key (db), you can use `openssl`. The examples in this guide will be using `openssl 1.1.1`, which is the latest Long Term Support release at the time of writing. Another option for the especially security consious is to use the TPM to generate the keys with it's hardware random number generator via the `tpm2-tss-engine` package.  
 
 The following command will produce an RSA 2048 private key, and a matching public key certificate. You are welcome to try RSA 4096 for added security but not all UEFI firmware implementations support this, so your mileage may vary, and it might not be immediately obvious that it didn't work. (It appears that firmware for Lenovo Thinkpads going back at least to 2016 support RSA 4096).

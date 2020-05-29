@@ -748,7 +748,7 @@ tpm2_policypcr --pcr-list sha256:0,1,2,3,7 --session temporary-authorized-policy
 Add the boot counter + 1 requirement using some `sed` magic to get the current boot counter:
 
 ```Shell
-tpm2_policycountertimer ---session temporary-authorized-policy.session --policy temporary-authorized-policy.policy --eq resets=$(($(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p)") + 1))
+tpm2_policycountertimer ---session temporary-authorized-policy.session --policy temporary-authorized-policy.policy --eq resets=$(($(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") + 1))
 ```
 
 - `--session temporary-authorized-policy.session` specifies the trial session we just created.
@@ -769,12 +769,14 @@ tpm2_flushcontext temporary-authorized-policy.session
 In order for the wildcard policy to accept this new policy, it must be signed by the key we created. To do this, we can use the `tpm2_sign` command:
 
 ```Shell
-tpm2_sign --key-context policy-authorization-key.handle --auth file:policy-authorization-access.bin --hash-algoritm sha256 --signature temporary-authorized-policy.signature temporary-authorized-policy.policy
+tpm2_sign --key-context policy-authorization-key.handle --auth file:policy-authorization-access.bin --hash-algoritm sha256 --scheme rsapss --signature temporary-authorized-policy.signature temporary-authorized-policy.policy
 ```
 
 - `--key-context policy-authorization-key.handle` specifies the key that we want to sign with.
 - `--auth file:policy-authorization-access.bin` specifies the authoriztion value needed to access the above key.
 - `--hash-algoritm sha256` specifies the hash algorithm to be used for the message digest.
+- `--scheme rsapss` specifies the signing scheme to use.
+  - This tool is supposed to be able to auto-detect this from the key you are using but there appears to be a bug with that right now, so just specify it.
 - `--signature temporary-authorized-policy.signature` specifies the file to save the signature in.
 - `temporary-authorized-policy.policy` specifies the value to be signed.
 

@@ -112,7 +112,9 @@ EOF
     create_authorized_policy_session() {
         ! tpm2_startauthsession -Q --policy-session -S /sealed-auth-session.ctx 2>/dev/null && return $?
 
-        ! tpm2_policypcr -Q -S /sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8" 2>/dev/null && return $?
+        ! tpm2_policypcr -Q -S /sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,7" 2>/dev/null && return $?
+
+        ! tpm2_policypcr -Q -S /sealed-auth-session.ctx -l "$pcr_bank_alg:4,5,8,9" 2>/dev/null && return $?
 
         tpm2_policyauthorize -Q -S /sealed-auth-session.ctx -i "$authorized_policy" -n "$policy_authorization_key_name" -t /authorized-policy.tkt 2>/dev/null
         return $?
@@ -139,7 +141,9 @@ EOF
     create_reauthorize_policy() {
         ! tpm2_startauthsession -Q -S /reauthorize-policy-session.ctx 2>/dev/null && return $?
 
-        ! tpm2_policypcr -Q -S /reauthorize-policy-session.ctx -l "$pcr_bank_alg:0,1,2,3,4,5,7,8" -L /reauthorize-policy.policy 2>/dev/null && return $?
+        ! tpm2_policypcr -Q -S /reauthorize-policy-session.ctx -l "$pcr_bank_alg:0,1,2,3,7" -L /reauthorize-policy.policy 2>/dev/null && return $?
+
+        ! tpm2_policypcr -Q -S /reauthorize-policy-session.ctx -l "$pcr_bank_alg:4,5,8,9" -L /reauthorize-policy.policy 2>/dev/null && return $?
 
         tpm2_flushcontext -Q /reauthorize-policy-session.ctx 2>/dev/null
 

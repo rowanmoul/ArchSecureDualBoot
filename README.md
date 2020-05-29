@@ -33,7 +33,6 @@
     - [Generate a primary key](#generate-a-primary-key)
       - [Generate the authorization value with the TPM](#generate-the-authorization-value-with-the-tpm)
       - [Generate the primary key with the authorization value](#generate-the-primary-key-with-the-authorization-value)
-      - [Persist the Primary key to the TPM storage](#persist-the-primary-key-to-the-tpm-storage)
     - [Add Authorization for Dictionary Attack Lockout](#add-authorization-for-dictionary-attack-lockout)
       - [Generate the DA Lockout authorization value](#generate-the-da-lockout-authorization-value)
       - [Set the DA Lockout authorization value](#set-the-da-lockout-authorization-value)
@@ -72,8 +71,7 @@
     - [What is Secure Boot?](#what-is-secure-boot)
     - [Reasons to use Secure Boot](#reasons-to-use-secure-boot)
     - [Generating New Secure Boot Keys](#generating-new-secure-boot-keys)
-      - [Generate the private keys](#generate-the-private-keys)
-      - [Generate the public certificates](#generate-the-public-certificates)
+      - [Generate the keys](#generate-the-keys)
     - [Converting the certificates to EFI signature list format](#converting-the-certificates-to-efi-signature-list-format)
       - [Generate a GUID](#generate-a-guid)
       - [Convert the certificates](#convert-the-certificates)
@@ -324,7 +322,7 @@ You will then have to open the file and remove the `#` from each mirror to activ
 Run this command to install all the basic packages you will need for this guide (plus one or two useful utilities that you will probably just install later anyway):
 
 ```Shell
-pacstrap /mnt base linux linux-firmware vim sudo man-db man-pages texinfo openssl cryptsetup efitools sbsigntools grub efibootmgr tpm2-tools tpm2-abrmd tpm2-tss-engine
+pacstrap /mnt base linux linux-firmware vim sudo man-db man-pages texinfo openssl cryptsetup efitools sbsigntools grub efibootmgr tpm2-tools tpm2-abrmd python
 ```
 
 If you prefer the packages listed on separate lines, here they are, in no particular order:
@@ -346,7 +344,7 @@ grub
 efibootmgr
 tpm2-tools
 tpm2-abrmd
-tpm2-tss-engine
+python
 ```
 
 This package set will get you booting and doing everthing in this guide, but not a whole lot else. If you know what other packages you want, install them now (in particular, make sure you install something to allow you connect to a network or you'll have to boot the live disk again just to install more packages later!)
@@ -430,7 +428,9 @@ Refer above in the optional section about generating a master key to see how to 
 ### Generate a primary key
 
 Primary keys sit at the top of a TPM hierarchy and are used to encrypt child keys. Children can be stored in the TPM, or outside in a file, but they cannot be decrypted without the primary key. If a primary key is compromised, so is every key under it (in theory).  
-Primary keys are derived from the Hierarchy Primary Seed (in this case, the Owner Hierarchy Primary Seed). The derivation function is deterministic. Given the same key template, it can regenerate the same key every time. This means that it is extremely important to make sure our template is unique or anyone can simply generate the same key that we did. We can do this by setting an autorizaton value during the creation of the primary key. Setting this value simultaneously makes our key unique and prevents it's usage without providing the value (which is important since we plan to persist it in the TPM NVRAM). We can then store the authorization value in a secure location (such as a LUKS encrypted USB Flash Drive). Only someone with access to that authorization value can use the primary key stored in the TPM NVRAM. If someone manages to aquire the authorization value they would still need access to *this* TPM before they can re-generate the primary key (using the hierarchy seed) or to otherwise use the existing copy. **That said, the authorization value should be given the same care in storage as a private key.**  
+With that in mind, the best way to ensure nobody else can access and use your primary key is to not store it anywhere. How does that work? Primary keys are derived from the Hierarchy Primary Seed (in this case, the Owner Hierarchy Primary Seed). The derivation function is deterministic. Given the same key template, it can regenerate the same key every time. This means that it is extremely important to make sure our template is unique or anyone can simply generate the same key that we did. One way we can do this is by setting an autorizaton value during the creation of the primary key. Setting this value simultaneously makes our key unique and prevents it's usage without providing the value. We can then store the authorization value in a secure location (such as a LUKS encrypted USB Flash Drive) so that only someone with access to that authorization value and the hierarchy seed in *this* TPM can re-generate the primary key. If the hierarchy seed is reset, we will not be able to re-generate the key, however all the data we will be encrypting with it is replaceable since we have the original LUKS passphrase as backup, so this is not a concern.  
+**That said, the authorization value should be given the same care in storage as a private key.**
+
 To generate the authorization value, you can use the TPM's TRNG, or some other source of entropy of your choice.
 
 #### Generate the authorization value with the TPM
@@ -456,34 +456,20 @@ There are many more options for this command, but in this case we are sticking t
 
 - Hierarchy: Owner
 - Algorithm: `rsa2048:null:aes128cfb`
-  - Many TPMs won't offer much better than this as the spec doesn't require it. Depending on which version of the spec your TPM conforms to, it may also have `aes256` but it is recommended to use algorithms with matching key strengths (`rsa2048`'s 112 bits considered close enough to `aes128`'s 128 bits, though `rsa3072`'s 128 bits would be a better match). `rsa16384` would be required for 256 bit key strength to match `aes256`. You can check which algorithms your tpm supports using the [tpm2_testparms](https://github.com/tpm2-software/tpm2-tools/blob/4.1.1/man/tpm2_testparms.1.md) command.
+  - Many TPMs won't offer much better than this as the spec doesn't require it. Depending on which version of the spec your TPM conforms to, it may also have `aes256` but it is recommended to use algorithms with matching key strengths (`rsa2048`'s 112 bits considered close enough to `aes128`'s 128 bits, though `rsa3072`'s 128 bits would be a better match most TPMs do not support it). `rsa16384` would be required for a 256 bit key strength to match `aes256`. You can check which algorithms your tpm supports using the [tpm2_testparms](https://github.com/tpm2-software/tpm2-tools/blob/4.1.1/man/tpm2_testparms.1.md) command.
 - Hash Algorithm: `sha256`
 - Attributes: `restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda`
 - Authorization Policy: null, which means it can never be satisfied.
-
-#### Persist the Primary key to the TPM storage
-
-If we only wanted to use the Primary Key during this boot, we could just use the `primary-key.context` file created above for everything without ever persisting the key anywhere. If we need to access the key at a later time we could either regenerate it at that time, or persist it now, the latter of which we are going to do here. To do this, we use the `tpm2_evictcontrol` tool. It is not clear why the tool is called that beyond the tool's name matching the internal TPM command's name. Possibly a reference to the TPM taking control of the object when you persist it, and "evicting" it from the NVRAM when you remove it.
-
-```Shell
-tpm2_evictcontrol --object-context primary-key.context --output primary-key.handle
-```
-
-- `--object-context primary-key.context` specifies the object that should be permanently stored in the TPM.
-- `--output primary-key.handle` saves the interal handle (NVRAM address) where the object was stored to a file that can later be used to reference that object, like a context file except it works across boots.
-
-**Important!**
-Make sure to also write down the TPM handle that this command prints out (a hex value in the form `0x81000001`). The handle file output above is binary and there is not presently an easy way to decode it. We will need the handle value in the section about secure boot later on.
 
 ### Add Authorization for Dictionary Attack Lockout
 
 All Heirarchies have authorization values and/or policies that allow the generation of keys with their seeds, among other things, but these are typically not set for the Owner Hierarchy to allow it's use by multiple programs and users. If you lock it down, it is unlikely that bitlocker will be functional as it probably also uses the Owner Hierarchy (this was not tested, but is how the TPM specification expects the TPM to be used). The Endorsement Hierarchy is not used for this guide and will not be covered. The Platform Hierarchy's authorization is cleared on every boot, and it is expected that the BIOS or some other low-level firmware sets this early in the boot process, which means that the end user typically doesn't have access to the Platform Hierarchy.
 In addition to the hierarchy authorizations, the TPM also has a Dictionary Attack (DA) Lockout mechanism that prevents dictionary attacks on the authorization values for primary keys and their children. Note that this mechanism does NOT affect hierarchy authorization values. The DA lockout also has an authorization value and/or policy that can be used to reset the lockout, as well as a few other administrative commands.  
-One of the adminstrative commands that is enabled by the DA lockout authorization value is the [tpm2_clear command](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_clear.1.md), which will clear all objects from the TPM and reset the heirarchy seeds. This command can also be activated with the Platform authorization but since we have no control over the Platform Hierarchy, it is the DA Lockout authorization that we need to worry about. Setting an authorization value on the DA lockout not only prevents `tpm2_clear` from being run by anyone else, but it also prevents the lockout from being reset, both of which are important for security.
+Recall how we created our primary key. We are relying on being able to regenerate it whenever we need to, so we need to make sure that the Owner Hierarchy Seed doesn't change or our key can never be regenerated. The seed can be reset with the [tpm2_clear command](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_clear.1.md), which will clear all objects from the TPM and reset the heirarchy seeds. This command can be activated with either the Platform Hierarchy authorization or the DA Lockout authorization, but since we have no control over the Platform Hierarchy, it is the DA Lockout authorization that we need to worry about. Setting an authorization value on the DA lockout not only prevents `tpm2_clear` from being run by anyone else, but it also prevents the lockout from being reset, both of which are important for security.
 
 #### Generate the DA Lockout authorization value
 
-This key should be stored securely, just as with the unique data for the Primary key.
+This key should be stored securely, just as with the authorization value for the Primary key.
 
 ```Shell
 tpm2_getrandom 32 > dictionary-attack-lockout-authorization.bin
@@ -885,7 +871,7 @@ To "install" these hooks simply copy them to `/etc/pacman.d/hooks` or `/etc/pacm
 
 ##### GRUB updates
 
-Before getting into creating a temporary policy in a hook, we need to address another issue that is slightly related: updating the `grub` package does not trigger a re-install of the GRUB boot image on your efi partition, nor does it regenrate the configuration. This was probably a very conscious choice on the part of the Arch Linux maintainers. Everyone has their own slightly different setup, be it different partition scheme, or a non-standard install location, and auto-installing grub for everyone would probably cause more problems that it solves. That said, what is the point of updating the package if the image we are booting with isn't getting updated? Plus, who wants to rememeber to run `grub-install` and `grub-mkconfig` every time with the right arguments? Lets add some hooks to fix this!
+Before getting into creating a temporary policy automatically, we need to address another issue that is slightly related: updating the `grub` package does not trigger a re-install of the GRUB boot image on your efi partition, nor does it regenrate the configuration. This was probably a very conscious choice on the part of the Arch Linux maintainers. Everyone has their own slightly different setup, be it different partition scheme, or a non-standard install location, and auto-installing grub for everyone would probably cause more problems that it solves. That said, what is the point of updating the package if the image we are booting with isn't getting updated? Plus, who wants to rememeber to run `grub-install` and `grub-mkconfig` every time with the right arguments? Lets add some hooks to fix this!
 
 The first hook is called `grub-1-install.hook`. It is an extremely simple hook that just calls `grub-install` with the same arguments that we used earlier when we first installed it. If your installtation is different, you'll want to edit the hook accordingly. There is also another hook called `grub-3-generate-configuration.hook` that will automatically re-generate the configuration file by calling `grub-mkconfig` the same way we did eariler. Again, edit this hook if your system is different. The third hook is called `grub-2-patch-add-windows-boot-entry.hook`, and it needs a little more explanation. Before we get into that, it's worth noting that the numbers in the names are there because pacman hooks are run in alphabetical order so naming them this way controls the order that they will run in.
 
@@ -903,7 +889,7 @@ The main thing to point out here is that this hook has two trigger sections, mea
 
 #### Trigger the hooks
 
-With all the hooks "installed", re-install `grub` with pacman to trigger the hooks and update the grub config with all the kernel arguments we added, as well as add the Windows boot entry. This will also trigger the other hook to re-create the temporary policy we made earlier, but it was still good to go through that to better understand how this all works.
+With all the hooks "installed", re-install `grub` with pacman (`pacman -S grub`) to trigger the hooks and update the grub config with all the kernel arguments we added, as well as add the Windows boot entry. This will also trigger the other hook to re-create the temporary policy we made earlier, but it was still good to go through that to better understand how this all works.
 
 ## Configuring Secure Boot
 
@@ -924,77 +910,52 @@ If "Secure" Boot isn't really all that secure, then why use it? On it's own, usi
 
 Chances are though, that you are wanting to dual boot with Windows. In that case, you might be wondering if it's worth bothering with after reading more about it at the links above. With everything accomplished so far you can definitely walk away with a working system that automatically unlocks your encrypted disk on boot, and is generally quite secure. That being said, there is at least one major hole in the system that can be mostly filled by using secure boot, and that is the use of the temporary policy on kernel updates and similar. Technically if you did an update and then shutdown your computer without turning it back on immediately that temporary policy is still sitting there valid and ready to unseal your LUKS passphrase. If someone got ahold of your computer in this state they could modify or replace your kernel, bootloader, and/or initramfs with a malicious copies and `tpm2_encrypt` would happily create a new authorized policy incorporating PCR measurements of these malicious files. Secure Boot doesn't remobe this problem this problem, but it mitigates it by adding another layer that an attacker has to get through. By requiring the kernel image, grub image, and initramfs to be signed by a "trusted" key, secure boot acts as a data integrity tool that provides a reasonable level of certainty that these critical early boot files have not been tampered with or replaced since you last shut down. Sure you could just remember to reboot immediately after a system update (and you should), but that's not completely the point. While secure boot doesn't really live up to it's name, it hardly makes your system less secure than having it turned off.
 
-At the end of the day, "invisible" security systems like the setup described here in this guide that automatically unlock your encrypted disk will never be completely secure. You sacrifice some security to convenience. This comes back to determining what your real threat model actually is, and then determining how secure you actually need your computer to be and what attack vectors you need to protect against. If you just used LUKS on it's own with the `encrypt` hook and typed in a passphrase every boot there is no question that would be more secure, but it would certainly be less convenient to have to type in two passwords just to get into your computer.
+At the end of the day, "invisible" security systems like the setup described here in this guide that automatically unlock your encrypted disk will never be as secure as more opaque alternatives. You sacrifice some security to convenience. This comes back to determining what your real threat model actually is, and then determining how secure you actually need your computer to be and what attack vectors you need to protect against. If you just used LUKS on it's own with the `encrypt` hook and typed in a passphrase every boot there is no question that would be more secure (assuming a very strong passphrase), but it would certainly be less convenient to have to type in two different passwords just to get into your computer.
 
 ### Generating New Secure Boot Keys
 
-Assuming you are still here, the first step to take control of secure boot on your machine is to replace the secure boot certificates with your own. In this guide we will be retaining the default keys so you can still boot Windows and get firmware updates with secure boot on. If you have decided not to retain those keys it should be easy to skip the relevant sections below.
+Assuming you are still here, the first step to take control of secure boot on your machine is to generate new secure boot keys of your own. In this guide we will also be retaining the default keys so you can still boot Windows and get firmware updates with secure boot on. If you have decided not to retain those keys it should be easy to skip the relevant sections below.  
+To generate a new Platofrm Key (PK), Key Exchange Key (KEK), and Database Key (db), you can use `openssl`. The examples in this guide will be using `openssl 1.1.1`, which is the latest Long Term Support release at the time of writing.
 
-#### Generate the private keys
-
-To generate a new Platofrm Key (PK), Key Exchange Key (KEK), and Database Key (db), we will be using `tpm2-tss-engine`. This package provides an engine called `tpm2-tss` that you can use with `openssl` to interact with TPM protected keys. At the time of this writing we are on `tpm2-tss-engine` version `1.0.1` which does not suport the use of existing keys (either keys generated externally by tools in `openssl`, or keys created in the tpm with `tpm2-tools`), however it does provide a tool called `tpm2tss-genkey` which will generate a new TPM protected key in the right format. "TPM protected key" refers to a key that is encrypted by a key that already exists in the TPM, such as the Primary Key we created earlier. This is similar to creating a key with `tpm2_create` except it produces a special key format used by the `tpm2-tss` engine which is similar in structure to the standard PEM format.
-
-The following command will produce an RSA 2048 key protected by the primary key we created earlier. This is where we need that persistent handle for the primary key from earlier in the form `0x81000001`. At present we cannot use a handle file here, but need to give the raw handle.
+The following command will produce an RSA 2048 private key, and a matching public key certificate.
 
 ```Shell
-tpm2tss-genkey --parent 0x81000001 --parentpw file:primary-key-authorization.bin --password somepassword PK.tss
-```
-
-- `--parent 0x81000001` specifies the parent object to encrypt this key with - Make sure you change this to the handle your primary key was stored at!
-  - If this is not specified, this tool will generate a new ECC key to use (ECC because it's fast).
-- `--parentpw file:primary-key-authorization.bin` specifies the authorization value for the parent object.
-- `--password somepassword` specifies the authorization value for the new key.
-  - This is optional but recommended. Nobody can use this key without the file output in the next argument, nor can they re-generate it.
-- `PK.tss` specifies the file to output the encrypted key to in a special PEM format.
-
-**Run the above command three times, generating a PK, KEK, and db private keys:**
-
-```Shell
-tpm2tss-genkey --parent 0x81000001 --parentpw file:primary-key-authorization.bin --password somepassword PK.tss
-
-tpm2tss-genkey --parent 0x81000001 --parentpw file:primary-key-authorization.bin --password somepassword KEK.tss
-
-tpm2tss-genkey --parent 0x81000001 --parentpw file:primary-key-authorization.bin --password somepassword db.tss
-```
-
-Make sure you store these keys in a safe place. At minimum, you will need the db key regularly to re-sign your kernel image, so copy that one to `/root/keys` like we did with certain files in the TPM section, and `chmod 400` it so that only root can read it, and can't overwrite it.
-
-#### Generate the public certificates
-
-Now that we have generated the private keys, we can generate the public certificates that we need for secure boot using `openssl`. The examples in this guide will be using `openssl 1.1.1`, which is the latest Long Term Support release at the time of writing.
-
-The following command will produce a public key certificate from our private keys.
-
-```Shell
-openssl req -new -x509 -engine tpm2-tss -keyform engine -key PK.tss -out PK.crt -days 3650
+openssl req -new -x509 -newkey rsa:2048 -keyout PK.key -out PK.crt -days 3650 -nodes
 ```
 
 - `req` is the `openssl` certificate request tool.
 - `-new` tells `req` to create a new certificate request.
 - `-x509` tells `req` to actually create a certificate rather than just a request for one.
-- `-engine tpm2-tss` tells `openssl` to use an engine other than the default software engine (in this case, the `tpm2tss-engine` that makes use of the TPM hardware).
-- `-keyform engine` tells `openssl` that the key we are passing in is in a format that the engine understands.
-- `-key PK.tss` specifies the key we are creating the certificate for.
-- `-out PK.crt` specifies output file for the certificate.
-- `-days 3650` specifies how long the certificate should be valid for. Since we are putting this certificate in our computer firmware, we want it to last a while. Will you still have this computer in 10 years?
+- `-newkey rsa:2048` tells openssl to generate a new private key using RSA 2048.
+- `-keyout PK.key` specifies the output file for the private key.
+- `-out PK.crt`  specifies the output file for the certificate.
+- `-days 3650` specifies how long the certificate should be valid for.
+  - Since we are putting this certificate in our computer firmware, we want it to last a while. Will you still have this computer in 10 years?  
+- `-nodes` this tells openssl to not encrpyt the private key. If you want to encrpyt it with a password, remove this option and you will be prompted.
+  - For the PK and KEK, you should store these keys somewhere separate like a LUKS encrypted flash drive.
+  - For the db key, you will need access to it regularly to sign new kernel images. If you are storing it inside your encrypted disk with file and folder permissions set to root only, just like the policy-authorization-access, then it should be fine. If someone gets root access to your machine you have bigger problems.
 
-When you run this command you will be prompted to enter some details about yourself as the issuer of the certificate. You can put as little or as much as you want here, but at least set the common name and/or organizaton. These can also be set from the above command with, for example, `-subj /CN=your common name/O=your org name/` if you do not want to do it interactively  
+When you run this command you will be prompted to enter some details about yourself as the issuer of the certificate. You can put as little or as much as you want here, but at least set the common name and/or organizaton. These can also be set from the above command with, for example, `-subj /CN=your common name/O=your org name/` if you do not want to do it interactively.  
 Unfortunately it is difficult to find a good list of all values that can go in here. They are listed in [RFC 5280 section 4.1.2.4](https://tools.ietf.org/html/rfc5280#section-4.1.2.4), but the short names are not included there. You can find some of them on [this SO post](https://stackoverflow.com/questions/6464129/certificate-subject-x-509).  
 As an example, this is the subject/issuer you'll find in the default PK on a lenovo thinkpad from 2016: `/C=JP/ST=Kanagawa/L=Yokohama/O=Lenovo Ltd./CN=Lenovo Ltd. PK CA 2012`
 
-**Run the above command three times, generating a PK, KEK, and db certificates:**
+#### Generate the keys
+
+Run the above command three times, generating a PK, KEK, and db key.
 
 ```Shell
-openssl req -new -x509 -engine tpm2-tss -keyform engine -key PK.tss -out PK.crt -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd PK/"  -days 3650
+openssl req -new -x509 -newkey rsa:2048 -keyout PK.key -out PK.crt -days 3650 -nodes -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd PK/"
 
-openssl req -new -x509 -engine tpm2-tss -keyform engine -key KEK.tss -out KEK.crt -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd KEK/"  -days 3650
+openssl req -new -x509 -newkey rsa:2048 -keyout KEK.key -out KEK.crt -days 3650 -nodes -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd KEK/"
 
-openssl req -new -x509 -engine tpm2-tss -keyform engine -key db.tss -out db.crt -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd db/"  -days 3650
+openssl req -new -x509 -newkey rsa:2048 -keyout db.key -out db.crt -days 3650 -nodes -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd db/"
 ```
+
+Make sure you store the private keys (`.key`) in a safe place. At minimum, you will need the db key regularly to re-sign your kernel image, so copy that one to `/root/keys` like we did with certain files in the TPM section, and `chmod 400` it so that only root can read it, and can't overwrite it.
 
 ### Converting the certificates to EFI signature list format
 
-The certificates generated are not in the format needed by the tools we will use to install them in the frimware. To fix this we will use some utilities from the `efitools` package. The version we are using here is 1.9.2.  
+The certificates generated are not in the format needed by the tools we will use to install them in the frimware. To fix this we will use some utilities from the `efitools` package. The version we are using here is `1.9.2`.  
 We want to convert our certificates to EFI Signature List (`.esl`) format. To do this, the following command is used:
 
 ```Shell

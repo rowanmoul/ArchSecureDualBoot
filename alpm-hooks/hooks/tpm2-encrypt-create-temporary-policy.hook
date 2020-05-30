@@ -8,12 +8,12 @@ Target = grub
 Operation = Install
 Operation = Upgrade
 Type = Path
-Target = /usr/lib/modules/*/vmlinuz
-Target = /usr/lib/initcpio/*
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/initcpio/*
 
 
 [Action]
-Description = Re-installing GRUB after update...
+Description = Creating temporary authorized TPM policy...
 When = PostTransaction
 Exec = /etc/pacman.d/scripts/tpm2-encrypt-create-temporary-policy
 Depends = grub

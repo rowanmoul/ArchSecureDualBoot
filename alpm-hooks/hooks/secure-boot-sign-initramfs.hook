@@ -2,8 +2,8 @@
 Operation = Install
 Operation = Upgrade
 Type = Path
-Target = /usr/lib/modules/*/vmlinuz
-Target = /usr/lib/initcpio/*
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/initcpio/*
 
 [Action]
 Description = Signing initramfs images with db key...

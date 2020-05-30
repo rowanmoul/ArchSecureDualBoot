@@ -28,15 +28,15 @@ run_hook() {
 
     # Check if partition is mounted at /efi. Abort if not.
     if ! mountpoint -q "/efi" 2>/dev/null; then
-        echo "tpm2-encrypt could not mount tpm_efi_part partition. Falling back to passphrase prompt."
+        echo "tpm2_encrypt could not mount tpm_efi_part partition. Falling back to passphrase prompt."
         return 1 
     fi
 
     # Check for tpm_file_dir and validate input
     if [ -n "$tpm_file_dir" ] && [ -d "/efi$tpm_file_dir" ]; then
         base_file_path="/efi$tpm_file_dir"
-    elif [ -d "/efi/EFI/arch/tpm2-encrypt" ]; then
-        base_file_path="/efi/EFI/arch/tpm2-encrypt"
+    elif [ -d "/efi/EFI/arch/tpm2_encrypt" ]; then
+        base_file_path="/efi/EFI/arch/tpm2_encrypt"
     else
         echo "tpm_file_dir and/or default file directory not available. Falling back to passphrase prompt."
         return 1
@@ -256,12 +256,12 @@ run_latehook() {
     if [ -f /reauthorize-policy.policy ]; then
         mv /reauthorize-policy.policy "$base_file_path/authorized-policy.policy"
 
-        tpm2_sign -c "$policy_authorization_key_handle" -p file:/new_root/root/keys/policy-authorization-access.bin -g sha256 -s rsapss -o "$base_file_path/authorized-policy.signature" "$base_file_path/authorized-policy.policy" 2>/dev/null
+        tpm2_sign -Q -c "$policy_authorization_key_handle" -p file:/new_root/root/keys/policy-authorization-access.bin -g sha256 -s rsapss -o "$base_file_path/authorized-policy.signature" "$base_file_path/authorized-policy.policy" 2>/dev/null
     fi
     if [ -f /reauthorize-pcr-values.txt ]; then
         mv /reauthorize-pcr-values.txt "$base_file_path/authorized-pcr-values.txt"
 
-        tpm2_sign -c "$policy_authorization_key_handle" -p file:/new_root/root/keys/policy-authorization-access.bin -g sha256 -s rsapss -o "$base_file_path/authorized-pcr-values.signature" "$base_file_path/authorized-pcr-values.txt" 2>/dev/null
+        tpm2_sign -Q -c "$policy_authorization_key_handle" -p file:/new_root/root/keys/policy-authorization-access.bin -g sha256 -s rsapss -o "$base_file_path/authorized-pcr-values.signature" "$base_file_path/authorized-pcr-values.txt" 2>/dev/null
     fi
 }
 

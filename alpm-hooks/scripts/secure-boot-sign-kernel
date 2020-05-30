@@ -4,7 +4,7 @@
 cp /boot/vmlinuz-linux vmlinuz-linux
 
 # sign the image and overwrite the original with the signed copy.
-sbsign --key /root/keys/db.key --cert /root/keys/db.crt --output /boot/vmlinuz-linux vmlinuz-linux
+echo -n "vmlinuz-linux - " && sbsign --key /root/keys/db.key --cert /root/keys/db.crt --output /boot/vmlinuz-linux vmlinuz-linux
 
 # Make sure the new signed image is larger than the copy of the original.
 # Since the signing process adds the signature to the file itself, the new image should be slightly larger.

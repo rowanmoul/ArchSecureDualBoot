@@ -3,17 +3,17 @@
 # This script is explained in detail in the accompanying guide/readme section "Create a temporary policy"
 
 # Start a "trial" auth session.
-tpm2_startauthsession --hash-algorithm sha256 --session temporary-authorized-policy.session
+tpm2_startauthsession -Q --hash-algorithm sha256 --session temporary-authorized-policy.session
 
 # Add pcr values we know won't change on a kernel or grub update
-tpm2_policypcr --pcr-list sha256:0,1,2,3,7 --session temporary-authorized-policy.session
+tpm2_policypcr -Q --pcr-list sha256:0,1,2,3,7 --session temporary-authorized-policy.session
 
 # Add a requirement that the policy only be satisfied if the TPM reset_count is one plus it's current value
-tpm2_policycountertimer ---session temporary-authorized-policy.session --policy /boot/tpm2_encrypt/temporary-authorized-policy.policy --eq resets=$(($(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") + 1))
+tpm2_policycountertimer -Q --session temporary-authorized-policy.session --policy /boot/tpm2_encrypt/temporary-authorized-policy.policy --eq resets=$(($(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") + 1))
 
 # cleanup temporary session file
 tpm2_flushcontext temporary-authorized-policy.session
 rm temporary-authorized-policy.session
 
 # sign the policy with the policy authorization key
-tpm2_sign --key-context /root/keys/policy-authorization-key.handle --auth file:/root/keys/policy-authorization-access.bin --hash-algoritm sha256 --scheme rsapss --signature /boot/tpm2_encrypt/temporary-authorized-policy.signature /boot/tpm2_encrypt/temporary-authorized-policy.policy
+tpm2_sign -Q --key-context /root/keys/policy-authorization-key.handle --auth file:/root/keys/policy-authorization-access.bin --hash-algorithm sha256 --scheme rsapss --signature /boot/tpm2_encrypt/temporary-authorized-policy.signature /boot/tpm2_encrypt/temporary-authorized-policy.policy

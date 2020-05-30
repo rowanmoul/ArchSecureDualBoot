@@ -2,7 +2,7 @@
 Operation = Install
 Operation = Upgrade
 Type = Path
-Target = /usr/lib/modules/*/vmlinuz
+Target = usr/lib/modules/*/vmlinuz
 
 [Action]
 Description = Signing kernel image with db key...

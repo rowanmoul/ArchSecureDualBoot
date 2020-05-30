@@ -82,12 +82,16 @@
       - [Sign the files](#sign-the-files)
     - [Installing the new Secure Boot Keys](#installing-the-new-secure-boot-keys)
       - [Install new secure boot keys](#install-new-secure-boot-keys)
-    - [Conclusion](#conclusion)
-  - [Signing your bootloader and kernel automatically on update](#signing-your-bootloader-and-kernel-automatically-on-update)
+    - [Test your new secure boot keys](#test-your-new-secure-boot-keys)
+    - [Automating the signing of your bootloader, kernel, and initramfs](#automating-the-signing-of-your-bootloader-kernel-and-initramfs)
+  - [Conclusion](#conclusion)
   - [Resources](#resources)
-    - [TPM Fundamentals](#tpm-fundamentals)
+    - [Security Fundamentals](#security-fundamentals)
+    - [TPM](#tpm)
+    - [Arch Installation](#arch-installation)
+    - [Linux Boot Process](#linux-boot-process)
+    - [Pacman Hooks](#pacman-hooks-1)
     - [Drive Encryption](#drive-encryption)
-    - [TPM 2.0 Drive Key Sealing/Unlocking](#tpm-20-drive-key-sealingunlocking)
     - [Secure Boot](#secure-boot)
 
 # Dual Booting Arch Linux and Windows 10 with Secure Boot and Encrypted Disks
@@ -158,7 +162,7 @@ The main type of TPM Objects that this guide will deal with are primary keys, an
 
 #### How to interact with the TPM
 
-To interact with the TPM, there is a set of open source linux user-space tools developed by Intel that are available in the official Arch repositories called `tpm2-tools`. It is a collection of command line programs to interact with the TPM via the `tpm2-tss` library to talk to the TPM, as well as the optional but strongly recommended `tpm2-abrmd` for access and resource management. Your best resource for these tools are the [manpages](https://github.com/tpm2-software/tpm2-tools/tree/master/man) in the git repo (or you can use `# man <tool>` but you have to know the name of the tool first). Anywhere you see a commandline tool used in this guide that starts with `tpm2_` in this guide, you can find that tool in `tpm2-tools`  
+To interact with the TPM, there is a set of open source linux user-space tools developed by Intel that are available in the official Arch repositories called `tpm2-tools`. It is a collection of command line programs to interact with the TPM via the `tpm2-tss` library to talk to the TPM, as well as the optional but strongly recommended `tpm2-abrmd` for access and resource management. Your best resource for these tools are the [manpages](https://github.com/tpm2-software/tpm2-tools/tree/master/man) in the git repo (or you can use `man <tool>` but you have to know the name of the tool first). Anywhere you see a commandline tool used in this guide that starts with `tpm2_` in this guide, you can find that tool in `tpm2-tools`  
 
 The version of `tpm2-tools` used to write this guide was `4.1.1`, however note that the manpages link is for the master branch. These tools are under continuous development and they have been known to change quite significatly between major versions so take notice of which version you have, and select the appropriate release tag before reading any of the manpages.  
 
@@ -352,7 +356,7 @@ This package set will get you booting and doing everthing in this guide, but not
 #### Genfstab
 
 Mount your efi partition at `/mnt/efi`. You will have to create that directory first.  
-For this guide, the future system's `/boot` directory will be bind mounted at `/efi/EFI/arch`:
+For this guide, the future system's `/boot` directory will be bind mounted at `/efi/EFI/arch` as found in [this wiki section](https://wiki.archlinux.org/index.php/EFI_system_partition#Alternative_mount_points):
 
 ```Shell
 mount --bind /mnt/efi/EFI/arch /mnt/boot
@@ -448,7 +452,7 @@ tpm2_creatprimary --key-auth file:primary-key-authorization.bin --key-context pr
 ```
 
 - `--key-auth file:primary-key-authorization.bin` passes in the authorization value that we just generated.
-  - Note the `file:` prefix. This is needed whenever a key is specified in a file to a `tpm2_*` command. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/4.1.1/man/common/authorizations.md).
+  - Note the `file:` prefix. This is needed whenever a key is specified in a file to a `tpm2_*` command. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/authorizations.md).
 - `--key-context primary-key.context` saves the key's context to a file for reference later.
   - Since we are using the `tpm2-abrmd` resource manager, our key is flushed from the TPM memory at the end of each command, but can be restored as needed using this file in subsequent commands (but only during this boot). If we were not using a resource manager but accessing the TPM directly the key would remain in the TPM's memory (which is quite limited) until explicitly flushed, or at power down.
 
@@ -456,7 +460,7 @@ There are many more options for this command, but in this case we are sticking t
 
 - Hierarchy: Owner
 - Algorithm: `rsa2048:null:aes128cfb`
-  - Many TPMs won't offer much better than this as the spec doesn't require it. Depending on which version of the spec your TPM conforms to, it may also have `aes256` but it is recommended to use algorithms with matching key strengths (`rsa2048`'s 112 bits considered close enough to `aes128`'s 128 bits, though `rsa3072`'s 128 bits would be a better match most TPMs do not support it). `rsa16384` would be required for a 256 bit key strength to match `aes256`. You can check which algorithms your tpm supports using the [tpm2_testparms](https://github.com/tpm2-software/tpm2-tools/blob/4.1.1/man/tpm2_testparms.1.md) command.
+  - Many TPMs won't offer much better than this as the spec doesn't require it. Depending on which version of the spec your TPM conforms to, it may also have `aes256` but it is recommended to use algorithms with matching key strengths (`rsa2048`'s 112 bits considered close enough to `aes128`'s 128 bits, though `rsa3072`'s 128 bits would be a better match most TPMs do not support it). `rsa16384` would be required for a 256 bit key strength to match `aes256`. You can check which algorithms your tpm supports using the [tpm2_testparms](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_testparms.1.md) command.
 - Hash Algorithm: `sha256`
 - Attributes: `restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda`
 - Authorization Policy: null, which means it can never be satisfied.
@@ -906,7 +910,7 @@ If you do follow one of those guides instead, make sure to come back here for th
 
 ### Reasons to use Secure Boot
 
-If "Secure" Boot isn't really all that secure, then why use it? On it's own, using Secure Boot with Microsoft's keys installed isn't all that secure for the reasons outlined above. If you aren't dual booting Windows you can delete the Microsoft keys and secure boot becomes extremely effective, as you have complete control over what gets signed. Technically you could do that and then sign your Windows bootloader with your own key, but that would get tedious fast and is very likely to break some part of Windows Update which we can't just add hooks to like Pacman. 
+If "Secure" Boot isn't really all that secure, then why use it? On it's own, using Secure Boot with Microsoft's keys installed isn't all that secure for the reasons outlined above. If you aren't dual booting Windows you can delete the Microsoft keys and secure boot becomes extremely effective, as you have complete control over what gets signed. Technically you could do that and then sign your Windows bootloader with your own key, but that would get tedious fast and is very likely to break some part of Windows Update which we can't just add hooks to like Pacman.
 
 Chances are though, that you are wanting to dual boot with Windows. In that case, you might be wondering if it's worth bothering with after reading more about it at the links above. With everything accomplished so far you can definitely walk away with a working system that automatically unlocks your encrypted disk on boot, and is generally quite secure. That being said, there is at least one major hole in the system that can be mostly filled by using secure boot, and that is the use of the temporary policy on kernel updates and similar. Technically if you did an update and then shutdown your computer without turning it back on immediately that temporary policy is still sitting there valid and ready to unseal your LUKS passphrase. If someone got ahold of your computer in this state they could modify or replace your kernel, bootloader, and/or initramfs with a malicious copies and `tpm2_encrypt` would happily create a new authorized policy incorporating PCR measurements of these malicious files. Secure Boot doesn't remobe this problem this problem, but it mitigates it by adding another layer that an attacker has to get through. By requiring the kernel image, grub image, and initramfs to be signed by a "trusted" key, secure boot acts as a data integrity tool that provides a reasonable level of certainty that these critical early boot files have not been tampered with or replaced since you last shut down. Sure you could just remember to reboot immediately after a system update (and you should), but that's not completely the point. While secure boot doesn't really live up to it's name, it hardly makes your system less secure than having it turned off.
 
@@ -1092,33 +1096,81 @@ efi-updatevar -f PK.auth PK
 
 Since we signed our efi signature lists and created auth files we should theoretically be able to update the KEK, db, and dbx even after setting the PK (which takes us out of setup mode), but `efi-updatevar` seems to have trouble doing this at least on the machine used as a testbed for this guide. There are other tools that work better for updating with signed esl files (`.auth`) when secure boot is in user mode. For example `KeyTool`, also from `efitools` seems to work fairly well, however it is an efi binary so you have to reboot to use it (like your BIOS setup), which is more cumbersome.
 
-### Conclusion
+### Test your new secure boot keys
 
 If you successfully completed all of the above sections, you now have your own keys added to secure boot, so you can start signing bootloaders and kernels with your db key!  
-If you want to quickly test your handywork `efitools` supplies a `HelloWorld` efi binary that you can sign and try to boot into. Here's how you would do that, assuming your efi system patition is mounted at `/boot` (you'll have to install a package called `sbsigntools`, which you'll need to sign your kernel later anyway).
+If you want to quickly test your handywork `efitools` supplies a `HelloWorld` efi binary that you can sign and try to boot into. Assuming your efi system patition is mounted at `/efi` as we setup earlier, we can use a tool called `sbsign` from the `sbsigntools` package to sign the efi binary.
 
 ```Shell
-mv /boot/EFI/Boot/bootx64.efi /boot/EFI/Boot/bootx64-prev.efi
+mv /boot/EFI/Boot/bootx64.efi /boot/EFI/Boot/bootx64-prev.efi # Rename the existing default boot entry so that we can restore it later.
 
 sbsign --key db.key --cert db.crt --output /boot/EFI/Boot/bootx64.efi /usr/share/efitools/efi/HelloWorld.efi
 ```
 
-This will rename your current default boot entry to bootx64-prev.efi so you can restore it after the test, and then sign and copy HelloWorld.efi into the default efi boot location so it will automaticlly boot. After running this, reboot, and enter BIOS setup. Enable secure boot and save. When you exit setup it should try to boot the HelloWorld binary we just copied, and becasue we signed it, it should work. If it doesn't, then something went wrong up above.
+- `--key db.key` specifies the private key to sign the file with.
+- `--cert db.cry` specifies the public certificate for the given private key that was added to secure boot.
+- `--output /boot/EFI/Boot/bootx64.efi` specifies where to save the signed version of the file.
+- `/usr/share/efitools/efi/HelloWorld.efi` specifies the file to sign.
 
-## Signing your bootloader and kernel automatically on update
+After running this, reboot, and enter BIOS setup. Enable secure boot and move your boot drive to the top of your boot order (above grub). When you exit setup it should try to boot the HelloWorld binary sinice it is in the efi default location for that drive, and becasue we signed it, it should work. If it doesn't, then something went wrong up above.  
+To get back to linux, just put grub back at the top of your boot order. **Don't forget to replace the hello world binary with the file that used to be there!**
 
-More Pacman hooks!
+### Automating the signing of your bootloader, kernel, and initramfs
+
+Now that we have setup our own secure boot keys, we need to use them to sign our bootloader, kernel and initramfs. Since these will be updated somewhat regularly, what better way to make sure they are always signed than to automate it! Since we already covered Pacman hooks above, lets just dive into the hooks themselves.
+
+There are three hooks called `secure-boot-sign-grub`, `secure-boot-sign-initramfs`, and `secure-boot-sign-kernel`, each to sign their respective images. They all have an accompanying script of the same name in the `scripts` folder. The implementation of these hooks is quite straightforward, and all three scripts are basically the same, with plenty of comments, so just go read them yourself.
+
+To "install" the hooks, just copy the files to `/etc/pacman.d/hooks` or `/etc/pacman.d/scripts` as appropriate for each file.
+
+## Conclusion
+
+You're done! You made it to the end!
 
 ## Resources
 
-Most of these resources linked in-line. All of these form the basis for the information contained within this guide, listed in no particular order, but organized by general topic area. I've included links to online man pages and other documentation for most of the tools used.
+This section reproduces most of the links that were included in-line throughout the guide (it omits some sub-pages), as well as added some other useful links such as online manpages for tools used. All of these form the basis for the information contained within this guide, listed in no particular order, but organized by general topic area.
 
-### TPM Fundamentals
+### Security Fundamentals
+
+1. <https://en.wikipedia.org/wiki/Evil_maid_attack>
+2. <https://en.wikipedia.org/wiki/Threat_model>
+3. <https://xkcd.com/538/>
+4. <https://en.wikipedia.org/wiki/Hardware_random_number_generator>
+
+### TPM
 
 1. <https://link.springer.com/book/10.1007%2F978-1-4302-6584-9>
-2. <https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/>
-3. <https://trustedcomputinggroup.org/resource/pc-client-platform-tpm-profile-ptp-specification/>
-4. <https://trustedcomputinggroup.org/resource/tpm-library-specification/>
+2. <https://en.wikipedia.org/wiki/Trusted_Platform_Module>
+3. <https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification>
+4. <https://trustedcomputinggroup.org/resource/pc-client-platform-tpm-profile-ptp-specification>
+5. <https://trustedcomputinggroup.org/resource/tpm-library-specification>
+6. <https://www.gnu.org/software/grub/manual/grub/grub.html#Measured-Boot>
+7. <https://tpm2-software.github.io/>
+8. <https://github.com/tpm2-software/tpm2-tools/tree/master/man>
+9. <https://medium.com/@pawitp/full-disk-encryption-on-arch-linux-backed-by-tpm-2-0-c0892cab9704>
+10. <https://blog.dowhile0.org/2017/10/18/automatic-luks-volumes-unlocking-using-a-tpm2-chip/>
+11. <https://threat.tevora.com/secure-boot-tpm-2/>
+
+### Arch Installation
+
+1. <https://wiki.archlinux.org/index.php/Installation_guide>
+2. <https://www.archlinux.org/mirrorlist/>
+3. <https://wiki.archlinux.org/index.php/EFI_system_partition#Alternative_mount_points>
+4. <https://wiki.archlinux.org/index.php/Chroot>
+5. <https://wiki.archlinux.org/index.php/GRUB#Configuration>
+
+### Linux Boot Process
+
+1. <https://en.wikipedia.org/wiki/Initial_ramdisk>
+2. <https://wiki.archlinux.org/index.php/Arch_boot_process>
+3. <https://wiki.archlinux.org/index.php/Mkinitcpio>
+4. <https://jlk.fjfi.cvut.cz/arch/manpages/man/mkinitcpio.8>
+5. <https://wiki.archlinux.org/index.php/Dm-crypt/System_configuration#Boot_loader>
+
+### Pacman Hooks
+
+1. <https://www.archlinux.org/pacman/alpm-hooks.5.html>
 
 ### Drive Encryption
 
@@ -1128,18 +1180,12 @@ Most of these resources linked in-line. All of these form the basis for the info
 4. <https://gitlab.com/cryptsetup/cryptsetup>
 5. <https://wiki.archlinux.org/index.php/Dm-crypt>
 
-### TPM 2.0 Drive Key Sealing/Unlocking
-
-1. <https://tpm2-software.github.io/>
-2. <https://github.com/tpm2-software/tpm2-tools/tree/master/man>
-3. <https://medium.com/@pawitp/full-disk-encryption-on-arch-linux-backed-by-tpm-2-0-c0892cab9704>
-4. <https://blog.dowhile0.org/2017/10/18/automatic-luks-volumes-unlocking-using-a-tpm2-chip/>
-5. <https://threat.tevora.com/secure-boot-tpm-2/>
-
 ### Secure Boot
 
 1. <http://www.rodsbooks.com/efi-bootloaders/controlling-sb.html>
 2. <https://wiki.gentoo.org/wiki/Sakaki%27s_EFI_Install_Guide/Configuring_Secure_Boot>
 3. <https://www.openssl.org/docs/man1.1.1/man1/openssl-req.html>
-4. <https://manpages.debian.org/unstable/efitools/index.html>
-5. <https://wiki.archlinux.org/index.php/Secure_Boot>
+4. <https://tools.ietf.org/html/rfc5280#section-4.1.2.4>
+5. <https://stackoverflow.com/questions/6464129/certificate-subject-x-509>
+6. <https://manpages.debian.org/unstable/efitools/index.html>
+7. <https://wiki.archlinux.org/index.php/Secure_Boot>

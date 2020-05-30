@@ -1,0 +1,25 @@
+#!/bin/bash -e
+
+# Copy the initramfs images to be signed to the present working directory.
+cp /boot/initramfs-linux.img initramfs-linux.img
+cp /boot/initramfs-linux-fallback.img initramfs-linux-fallback.img
+
+
+# sign the images and overwrite the originals with the signed copies.
+echo -n "initramfs-linux.img - " && sbsign --key /root/keys/db.key --cert /root/keys/db.crt --output /boot/initramfs-linux.img initramfs-linux.img
+echo -n "initramfs-linux-fallback.img - " && sbsign --key /root/keys/db.key --cert /root/keys/db.crt --output /boot/initramfs-linux-fallback.img initramfs-linux-fallback.img
+
+# Make sure the new signed images are larger than the copies of the originals.
+# Since the signing process adds the signature to the file itself, the new images should be slightly larger.
+# If the new images are not larger, this if will trigger and copy back the original images so that the computer isn't rendered unbootable.
+# Obviously this can't protect from corrupted images, but at least it's better than no checks at all.
+if [[ $(du -b /boot/initramfs-linux.img | cut -f1) -lt $(du -b initramfs-linux.img | cut -f1) ]] &&
+   [[ $(du -b /boot/initramfs-linux-fallback.img | cut -f1) -lt $(du -b initramfs-linux-fallback.img | cut -f1) ]]; then
+  cp initramfs-linux.img /boot/initramfs-linux.img
+  cp initramfs-linux-fallback.img /boot/initramfs-linux-fallback.img
+  echo "ERROR! Failed to sign one or more initramfs images for secure boot! Original images retained."
+fi
+
+# Remove the copies of the original images in the present working directory.
+rm initramfs-linux.img
+rm initramfs-linux-fallback.img

@@ -1,8 +1,12 @@
 <!-- omit in toc -->
+# Secure Booting Arch Linux Alongside Windows 10 with Encrpyted Disks
+
+This guide started as my personal documentation of this process for my own reference, and grew to become the monstrosity you see below. I am **not** a security expert. I am a software developer with experience primarily in web development and this guide is the culmination of my own reasearch into this topic and is by no means meant to impart any sort of sound security advice. It is up to you to determine if the setup described here is suitably secure for your needs. If something included in this guide is totally wrong, bad practice, or fundamentally insecure please open an issue, submit a pull request, or otherwise contact me. I welcome the feedback!
+
+<!-- omit in toc -->
 # Table of Contents
 
-- [Dual Booting Arch Linux and Windows 10 with Secure Boot and Encrypted Disks](#dual-booting-arch-linux-and-windows-10-with-secure-boot-and-encrypted-disks)
-  - [Disclaimer](#disclaimer)
+- [Introduction](#introduction)
   - [Before You Begin](#before-you-begin)
   - [How Bitlocker securely encrypts your drive without requiring a password at every boot](#how-bitlocker-securely-encrypts-your-drive-without-requiring-a-password-at-every-boot)
     - [What is a TPM?](#what-is-a-tpm)
@@ -94,13 +98,9 @@
     - [Drive Encryption](#drive-encryption)
     - [Secure Boot](#secure-boot)
 
-# Dual Booting Arch Linux and Windows 10 with Secure Boot and Encrypted Disks
+# Introduction
 
 So you want to dual boot Arch Linux and Windows 10, both with disk encryption. On Windows you have bitlocker turned on which encrpyts your disk without requiring a password on every boot. Then you disable secure boot to install Arch and now bitlocker is demanding that you either turn secure boot back on, or enter your recovery key each and every time you boot windows. Not ideal. This guide will help you take control of secure boot on your computer so that you can sign your Linux kernel and run it with secure boot turned on, as well as show you how to set up "bitlocker-like" disk encryption for your Linux partition (so you don't have to enter a password every time for Linux either). It is not for beginners, and expects a certain knowledge level of Linux, or at least an ability to look things up and learn as you go, just as with many other aspects of running Arch Linux as opposed to Ubuntu or similar "user friendly" distributions. While this guide attempts to include as many details as possible, it is far from exhaustive, and it is up to you to fill in the gaps and make any adjustments that you deem necessary for your situation.
-
-## Disclaimer
-
-I am **not** a security expert. I am a software developer with experience primarily in web development and this guide is the culmination of my own reasearch into this topic and is by no means meant to impart any sort of sound security advice. It is up to you to determine if the setup described here is suitably secure for your needs. If something included in this guide is totally wrong or insecure please open an issue or submit a pull request, I welcome the feedback!
 
 ## Before You Begin
 

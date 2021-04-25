@@ -14,6 +14,13 @@ This guide started as my personal documentation of this process for my own refer
     - [Platform Configuration Registers](#platform-configuration-registers)
     - [TPM Objects and Heirachies](#tpm-objects-and-heirachies)
     - [How to interact with the TPM](#how-to-interact-with-the-tpm)
+- [Secure Boot and how it works](#secure-boot-and-how-it-works)
+- [Overview (TLDR)](#overview-tldr)
+  - [Secure Boot Process](#secure-boot-process)
+  - [Encrypted Disk unlocked via TPM](#encrypted-disk-unlocked-via-tpm)
+  - [Two-Factor TPM disk unlock](#two-factor-tpm-disk-unlock)
+  - [What is not covered](#what-is-not-covered)
+  - [Limitations](#limitations)
 - [Installing Arch Linux on an Encrypted Disk alongside Windows with Bitlocker](#installing-arch-linux-on-an-encrypted-disk-alongside-windows-with-bitlocker)
   - [Pre Installation](#pre-installation)
   - [Setting up the Disk Encryption](#setting-up-the-disk-encryption)
@@ -29,9 +36,12 @@ This guide started as my personal documentation of this process for my own refer
     - [Genfstab](#genfstab)
     - [Chroot](#chroot)
     - [Timezone, Localization, and Network](#timezone-localization-and-network)
-    - [Bootloader](#bootloader)
     - [Root Password](#root-password)
     - [Enable tpm2-abrmd service](#enable-tpm2-abrmd-service)
+    - [Bootloader](#bootloader)
+    - [Make the system bootable](#make-the-system-bootable)
+    - [Reboot into your new Arch installation](#reboot-into-your-new-arch-installation)
+- [Prepare a USB flash drive to store TPM files](#prepare-a-usb-flash-drive-to-store-tpm-files)
 - [Sealing your LUKS Passphrase with TPM 2.0](#sealing-your-luks-passphrase-with-tpm-20)
   - [Mount a Ramfs as a working directory](#mount-a-ramfs-as-a-working-directory)
   - [Generate a primary key](#generate-a-primary-key)
@@ -54,7 +64,35 @@ This guide started as my personal documentation of this process for my own refer
   - [Creating an authorized policy to unseal the LUKS passphrase on boot](#creating-an-authorized-policy-to-unseal-the-luks-passphrase-on-boot)
     - [Create a temporary policy](#create-a-temporary-policy)
     - [Sign the Policy](#sign-the-policy)
-    - [Copy the policy and its signature to /boot/tpm2_encrypt](#copy-the-policy-and-its-signature-to-boottpm2_encrypt)
+    - [Copy the policy and its signature to /mnt/tpm2_encrypt](#copy-the-policy-and-its-signature-to-mnttpm2_encrypt)
+  - [Testing everything so far](#testing-everything-so-far)
+    - [Create and sign the test policy](#create-and-sign-the-test-policy)
+    - [Verify the policy](#verify-the-policy)
+    - [Create a real auth session](#create-a-real-auth-session)
+    - [Recreate the policy in the real auth sesson](#recreate-the-policy-in-the-real-auth-sesson)
+    - [Unseal and test the passphrase](#unseal-and-test-the-passphrase)
+- [Securing the boot process](#securing-the-boot-process)
+  - [Taking Control of Secure Boot](#taking-control-of-secure-boot)
+    - [Generating New Secure Boot Keys](#generating-new-secure-boot-keys)
+      - [Generate the keys](#generate-the-keys)
+    - [Converting the certificates to EFI signature list format](#converting-the-certificates-to-efi-signature-list-format)
+      - [Generate a GUID](#generate-a-guid)
+      - [Convert the certificates](#convert-the-certificates)
+    - [Preserving the default KEK and db, and dbx entries](#preserving-the-default-kek-and-db-and-dbx-entries)
+      - [Copy Original Keys](#copy-original-keys)
+      - [Append original keys to new keys](#append-original-keys-to-new-keys)
+    - [Signing the EFI signature list files](#signing-the-efi-signature-list-files)
+      - [Sign the files](#sign-the-files)
+    - [Installing the new Secure Boot Keys](#installing-the-new-secure-boot-keys)
+      - [Install new secure boot keys](#install-new-secure-boot-keys)
+    - [Test your new secure boot keys](#test-your-new-secure-boot-keys)
+  - [Securing the BIOS](#securing-the-bios)
+  - [Securing grub](#securing-grub)
+    - [Generate a GPG key](#generate-a-gpg-key)
+    - [Export the public portion of the key](#export-the-public-portion-of-the-key)
+    - [Configure grub to use the key](#configure-grub-to-use-the-key)
+    - [Configure grub with a passphrase](#configure-grub-with-a-passphrase)
+    - [Signing files for grub](#signing-files-for-grub)
 - [Automating Everything](#automating-everything)
   - [Automating Early Boot Tasks with Initramfs](#automating-early-boot-tasks-with-initramfs)
     - [Arch Linux and mkinitcpio](#arch-linux-and-mkinitcpio)
@@ -70,24 +108,8 @@ This guide started as my personal documentation of this process for my own refer
     - [Install the hooks](#install-the-hooks)
       - [GRUB updates](#grub-updates)
       - [tpm2-encrypt-create-temporary-policy](#tpm2-encrypt-create-temporary-policy)
+      - [secure boot signing](#secure-boot-signing)
     - [Trigger the hooks](#trigger-the-hooks)
-- [Configuring Secure Boot](#configuring-secure-boot)
-  - [What is Secure Boot?](#what-is-secure-boot)
-  - [Reasons to use Secure Boot](#reasons-to-use-secure-boot)
-  - [Generating New Secure Boot Keys](#generating-new-secure-boot-keys)
-    - [Generate the keys](#generate-the-keys)
-  - [Converting the certificates to EFI signature list format](#converting-the-certificates-to-efi-signature-list-format)
-    - [Generate a GUID](#generate-a-guid)
-    - [Convert the certificates](#convert-the-certificates)
-  - [Preserving the default KEK and db, and dbx entries](#preserving-the-default-kek-and-db-and-dbx-entries)
-    - [Copy Original Keys](#copy-original-keys)
-    - [Append original keys to new keys](#append-original-keys-to-new-keys)
-  - [Signing the EFI signature list files](#signing-the-efi-signature-list-files)
-    - [Sign the files](#sign-the-files)
-  - [Installing the new Secure Boot Keys](#installing-the-new-secure-boot-keys)
-    - [Install new secure boot keys](#install-new-secure-boot-keys)
-  - [Test your new secure boot keys](#test-your-new-secure-boot-keys)
-  - [Automating the signing of your bootloader, kernel, and initramfs](#automating-the-signing-of-your-bootloader-kernel-and-initramfs)
 - [Conclusion](#conclusion)
 - [Resources](#resources)
   - [Security Fundamentals](#security-fundamentals)
@@ -97,14 +119,16 @@ This guide started as my personal documentation of this process for my own refer
   - [Pacman Hooks](#pacman-hooks-1)
   - [Drive Encryption](#drive-encryption)
   - [Secure Boot](#secure-boot)
+  - [Secure Grub](#secure-grub)
 
 # Introduction
 
-So you want to dual boot Arch Linux and Windows 10, both with disk encryption. On Windows you have bitlocker turned on which encrpyts your disk without requiring a password on every boot. Then you disable secure boot to install Arch and now bitlocker is demanding that you either turn secure boot back on, or enter your recovery key each and every time you boot windows. Not ideal. This guide will help you take control of secure boot on your computer so that you can sign your Linux kernel and run it with secure boot turned on, as well as show you how to set up "bitlocker-like" disk encryption for your Linux partition (so you don't have to enter a password every time for Linux either). It is not for beginners, and expects a certain knowledge level of Linux, or at least an ability to look things up and learn as you go, just as with many other aspects of running Arch Linux as opposed to Ubuntu or similar "user friendly" distributions. While this guide attempts to include as many details as possible, it is far from exhaustive, and it is up to you to fill in the gaps and make any adjustments that you deem necessary for your situation.
+So you want to dual boot Arch Linux and Windows 10, both with disk encryption. On Windows you have bitlocker turned on which encrpyts your disk without requiring a password on every boot. Then you disable secure boot to install Arch and now bitlocker is demanding that you either turn secure boot back on, or enter your recovery key each and every time you boot windows. Not ideal. This guide will help you take control of secure boot on your computer so that you can sign your Linux kernel and run it with secure boot turned on, as well as show you how to set up "bitlocker-like" disk encryption for your Linux partition (so you don't have to enter a password every time for Linux either). We'll even take it a step further and add a second factor to the unlock process by requiring data stored on a USB flash drive that you keep with you.  
+It is not for beginners, and expects a certain knowledge level of Linux, or at least an ability to look things up and learn as you go, just as with many other aspects of running Arch Linux as opposed to Ubuntu or similar "user friendly" distributions. While this guide attempts to include as many details as possible, it is far from exhaustive, and it is up to you to fill in the gaps and make any adjustments that you deem necessary for your situation.
 
 # Before You Begin
 
-You want to disable Windows Bitlocker before proceeding, as we will be making changes that will result in the TPM not releasing the keys needed to decrypt the disk automatically. Read on to understand what this means (in fact, it is strongly suggested that you read the entire guide and suggested reference material before you begin so you can do further research to answer any questions you might have). The actual procedure described in this guide should take about an hour if you already know what you are doing (because you read the guide through first or are otherwise already knowledgeable).  
+You want to disable Windows Bitlocker before proceeding, as we will be making changes that will result in the TPM not releasing the keys needed to decrypt the disk automatically. Read on to understand what this means (in fact, it is strongly suggested that you read the entire guide and suggested reference material before you begin so you can do further research to answer any questions you might have). The actual procedure described in this guide should only take an hour or two if you already know what you are doing (because you read the guide through first or are otherwise already knowledgeable).  
 For disk encryption on Linux, it is easier to setup before installing Linux, as it involves the creation of a new encrypted logical volume on top of a physical partition. Alternatively, you can take a backup, or use remaining free space on the disk temporarily. This guide will only cover encrypting a new Linux installation (it briefly runs through installing a barebones Arch Linux system).  
 The beginning part of this guide assumes you are using a recent copy of the Arch Linux Live Disk. Once you have disabled secure boot and booted into the Arch Live Disk, install and start the following tools and services, as they are not included on the Live Disk and will be needed before we install the new system:
 
@@ -124,32 +148,32 @@ Before diving into the how-to part of this guide, it is important underand on a 
 
 For a good overview of what a TPM is and what it can do, go read [this](https://en.wikipedia.org/wiki/Trusted_Platform_Module) and the first chapter of [this book](https://link.springer.com/book/10.1007%2F978-1-4302-6584-9) (or all of it really). That free book is arguably the single most useful resource for understanding the otherwise poorly docmented TPM. Note that here "poorly" is meant as in it is difficult to understand the documentation, not that every little detail isn't documented and specified (because it really is).  
 The TPM can do a lot of things, but in the case of Bitlocker (as well as what we are about to do in Linux) it is used to cryptographically secure our disk encryption key in such a way that it can only be retrieved if the machine boots with the software we expect ([Platform Integrity](https://en.wikipedia.org/wiki/Trusted_Platform_Module#Platform_integrity)). This means that if someone where to try to boot from a live disk, or replace your bootloader or kernel ([evil maid attack](https://en.wikipedia.org/wiki/Evil_maid_attack)), the TPM will not release the disk encryption key.  
-"But wait, I read that Wikipedia page! It said there were ways extract secrets from TPMs!" Yes, it's not a flawless system, but if you read further about it, the only people with the resources to carry out such attacks probably already have your data, if they even want it. Joe Smith who picks up your lost laptop bag on the train and takes it home won't be able to. Consider what your realistic [threat model](https://en.wikipedia.org/wiki/Threat_model) is, and if this is something you need to be concerned with, this guide isn't what you need. Instead, you may want to get yourself a giant magnet to repel any [$5 wrenches](https://xkcd.com/538/) that might be swung in your direction.
+"But wait, I read that Wikipedia page! It said there were ways extract secrets from TPMs!" Yes, it's not a flawless system, but if you read further about it, the only people with the resources to carry out such attacks probably already have your data, if they even want it. Joe Smith who picks up your lost laptop bag on the train and takes it home won't be able to. Consider what your realistic [threat model](https://en.wikipedia.org/wiki/Threat_model) is, and if this is something you need to be concerned with, this guide isn't what you need. Instead, you may want to get yourself some sort of force field to repel any [$5 wrenches](https://xkcd.com/538/) that might be swung in your direction.
 
 ## How the TPM works
 
-This section will really only scratch the surface, but it should give enough of an overview of how the TPM works that you will understand it's usage in this guide. Again, the free ebook linked above contains a wealth of information if you want to do a true deep dive. You won't find a better resource.  
+This section will really only scratch the surface, but it should give enough of an overview of how the TPM works that you will understand it's usage in this guide. Again, the free ebook linked above contains a wealth of information if you want to do a true deep dive. You probably won't find a better resource.  
 Note that this guide assumes you are using a TPM that implements TPM 2.0, not TPM 1.2
 
 ### Platform Configuration Registers
 
-Platform Configuration Registers, or PCRs are the key feature of the TPM that we will be using. They are volatile memory locations within the TPM where the computer's firmware records "measurements" of the software that executes during the boot process (and possibly after boot as well). The values of the PCRs can be used to "seal" an encryption key (or another TPM object) with a policy that only allows the key to be released if the PCRs have the same value as they did when the polcy was created (which it is up to the user to determine is a trusted configuration). This is secure because unlike CPU registers, PCRs cannot be overritten or reset. They can only be "extended". All PCRs are initialized to zero at first power. Measurements are "extended" into the PCR by the firmware by passing the measurement to the TPM, which then "ORs" that data with the existing data in the PCR, takes a cryptograhic hash of the new value (usually sha1 or sha256) and then writes the hash digest to the PCR. "Measurements" are typically another cryptographic hash of the software binary or other data (such as configuration data) that is being measured.  
+Platform Configuration Registers, or PCRs are the key feature of the TPM that we will be using. They are volatile memory locations within the TPM where the computer's firmware records "measurements" of the software that executes during the boot process (and possibly after boot as well). The values of the PCRs can be used to "seal" an encryption key (or another TPM object) with a policy that only allows the key to be released if the PCRs have the same value as they did when the polcy was created (which is up to the user to determine is a trusted configuration). This is secure because unlike CPU registers, PCRs cannot be overritten or reset. They can only be "extended". All PCRs are initialized to zero at first power. Measurements are "extended" into the PCR by the firmware by passing the measurement to the TPM, which then "ORs" that data with the existing data in the PCR, takes a cryptograhic hash of the new value (usually sha1 or sha256) and then writes the hash digest to the PCR. "Measurements" are typically another cryptographic hash of the software binary or other data (such as configuration data) that is being measured.  
 A minimum of 24 PCRs are required on a standard PC, though some TPMs may have more, or might have multiple "banks" of 24 that use different hash algorithms.
 Different PCRs contain measurements of different parts of the boot process. The Trusted Computing Group (TCG), the creators of the TPM specification, define which values should be extended into each PCR.  
 It took me far too long to find this information unfortunately. It wasn't in the [TPM 2.0 Library Specification](https://trustedcomputinggroup.org/resource/tpm-library-specification/), or the [PC Client Platform TPM Profile Specification](https://trustedcomputinggroup.org/resource/pc-client-platform-tpm-profile-ptp-specification/). It can be found in the [PC Client Platform Firmware Profile
-Specification](https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/). The TCG seem to have the unfortunate philosophy of "don't repeat yourself ever if at all possible" so you have to read parts of six documents to get the full picture of anything. To save you from all that, the relevant parts have been boiled down into the table below. This table is not exhastive, which is why nearly a quarter of the firmware specification deals directly with PCR usage. However it should give you a good idea of what values are measured into each PCR so that you know when to expect the values to change (such as when you update your BIOS, Kernel, or Boot Loader).  
+Specification](https://trustedcomputinggroup.org/resource/pc-client-specific-platform-firmware-profile-specification/). The TCG seem to have the unfortunate philosophy of "don't repeat yourself ever if at all possible" so you have to read parts of multiple documents to get the full picture of anything. To save you from all that, the relevant parts have been boiled down into the table below. This table is not exhastive, which is why nearly a quarter of the firmware specification deals directly with PCR usage. However it should give you a good idea of what values are supposed to be measured into each PCR so that you know when to expect the values to change (such as when you update your BIOS, Kernel, or Boot Loader).  
 
 PCR&nbsp;&nbsp;&nbsp;|Description
 ---------------------|-----------
 0                    |UEFI BIOS Firmware, Embedded Device Drivers for non-removable hardware and other data from motherboard ROM.
 1                    |UEFI BIOS Configuration Settings, UEFI Boot Entries, UEFI Boot Order and other data from motherboard NVRAM and CMOS that is related to the firmware and drivers measured into PCR 0.
-2                    |UEFI Drivers and Applications for removable hardware such as adapter cards.<br>Eg. Most modern laptops have a wifi module and an m.2 ssd plugged into the motherboard rather than soldered on.
+2                    |UEFI Drivers and Applications for removable hardware such as adapter cards (including graphics cards).<br>Eg. Many modern laptops have a wifi module and an m.2 ssd plugged into the motherboard rather than soldered on.
 3                    |UEFI Variables and other configuration data that is managed by the code measured into PCR 2.
 4                    |Boot Loader (eg. GRUB), and boot attempts.<br>If the first selected UEFI Boot Entry fails to load, that attempt is recorded, and so on until the UEFI BIOS is able to pass control successfully to a UEFI application (usually a boot loader), at which point the binary for that application is also measured into this PCR.
 5                    |Boot Loader Configuration Data, and possibly (the specification lists these as optional) the UEFI boot entry path that was used, and the GPT/Partition Table data for the drive that the boot loader was loaded from.
 6                    |Platform Specific (your computer manufacturer can use this for whatever they want).
-7                    |Secure Boot Policy<br>This includes all the secure boot varibles, such as PK, KEK, db, and dbx values. Also recorded here is the db value(s) used to validate the Boot Loader Binary, as well as any other binaries loaded with UEFI LoadImage().
-8-15                 |Designated for use by the Operating System.<br>For the purposes of this guide, it is useful to note that GRUB extends measurements of it's configuration into PCR 8 rather than PCR 5. It also extends your kernel image and initramfs into PCR 9. See [this manual section](https://www.gnu.org/software/grub/manual/grub/grub.html#Measured-Boot) for details.
+7                    |Secure Boot Policy<br>This includes all the secure boot varibles, such as PK, KEK, db, and dbx values, as well as whether secure boot is on or off (why turning it off breaks bitlocker). Also recorded here is the db value(s) used to validate the Boot Loader Binary, as well as any other binaries loaded with UEFI LoadImage().
+8-15                 |Designated for use by the Operating System.<br>For the purposes of this guide, it is useful to note that GRUB extends measurements of it's configuration into PCR 8 rather than PCR 5. It also extends your kernel image, initramfs, and any other loaded files into PCR 9. See [this manual section](https://www.gnu.org/software/grub/manual/grub/grub.html#Measured-Boot) for details.
 16                   |Debug PCR.<br>Note that this PCR can be reset manually without rebooting.
 17-22                |No usage defined. Reserved for future use.
 23                   |Application Support. This PCR is also resettable, like PCR 16, and can be used by the OS for whatever purpose it might need it for.
@@ -162,7 +186,7 @@ The main type of TPM Objects that this guide will deal with are primary keys, an
 
 ### How to interact with the TPM
 
-To interact with the TPM, there is a set of open source linux user-space tools developed by Intel that are available in the official Arch repositories called `tpm2-tools`. It is a collection of command line programs to interact with the TPM via the `tpm2-tss` library to talk to the TPM, as well as the optional but strongly recommended `tpm2-abrmd` for access and resource management. Your best resource for these tools are the [manpages](https://github.com/tpm2-software/tpm2-tools/tree/master/man) in the git repo (or you can use `man <tool>` but you have to know the name of the tool first). Anywhere you see a commandline tool used in this guide that starts with `tpm2_` in this guide, you can find that tool in `tpm2-tools`  
+To interact with the TPM, there is a set of open source linux user-space tools originally developed by [Intel](https://software.intel.com/content/www/us/en/develop/blogs/tpm2-software-stack-open-source.html) that are available in the official Arch repositories called `tpm2-tools`. It is a collection of command line programs to interact with the TPM via the `tpm2-tss` library to talk to the TPM, as well as the optional but strongly recommended `tpm2-abrmd` for access and resource management. Your best resource for these tools are the [manpages](https://github.com/tpm2-software/tpm2-tools/tree/master/man) in the git repo (or you can use `man <tool>` but you have to know the name of the tool first). Anywhere you see a commandline tool used in this guide that starts with `tpm2_`, you can find that tool in `tpm2-tools`  
 
 The version of `tpm2-tools` used to write this guide was `4.1.1`, however note that the manpages link is for the master branch. These tools are under continuous development and they have been known to change quite significatly between major versions so take notice of which version you have, and select the appropriate release tag before reading any of the manpages.  
 
@@ -170,6 +194,40 @@ The `tpm2-tss` library is an implementation of the TCG's "TPM Software Stack" as
 
 `tpm2-abrmd` is a user space TPM Access Broker and Resource Management Daemon. It does exactly what it says on the tin. While it is true that the tools/tss can just access the TPM directly (the kernel makes it available as `/dev/tpm0`), this daemon allows for multiple programs to use the TPM at the same time without colliding, among other helpful functions. It also provides extended session support when creating policies. The version used in this guide is `2.3.1`.  
 The kernel has a built in resource manager at `/dev/tpmrm0` but it is not as fully featured as the userspace one at this point in time.
+
+# Secure Boot and how it works
+
+Secure Boot is a UEFI system that prevents the execution of unsigned EFI binaries, such as OS bootloaders (grub). It does this by maintaining a certificate registry that each EFI binary's signature is checked against. If there is no match then it won't be executed, thereby providing some level of certainty that binaries running are "trusted" and establishing the start of a chain of trust that can extend all the way to the running operating system. That trust is unfortunately somewhat relative though. The reason for this is that nearly every computer in the world comes with Microsoft's Secure Boot keys pre-installed. These keys are controlled by Microsoft and used to sign Windows bootloaders as well as firmware for plugin cards such as graphics cards, but they have also been used to sign other EFI binaries such as one called `shim` which can effectively allow any other EFI binary to run without having to be signed by Microsoft (though this does require physical presence to install an alternate certificate that `shim` will use to verify signatures, making it a limited attack vector). It is also worth noting that `shim` is not malicious in nature, and was signed to allow Linux distributions to work with secure boot without users having to go through the process you will see below, it just has the unfortnate side effect of creating a security hole under certain threat models.
+
+# Overview (TLDR)
+
+Now that we have covered secure boot, as well as the fundamentals of what a TMP is and how Bitlocker uses it, lets walk through what this guide will show you what the guide will setup at a high level.  
+The one sentence version:
+>The goal is to create a system that provides reasonable confidence that the computer is booting in a "trusted" configuration, and unlock the encrypted disk automatically using the TPM if that is the case.
+
+This section was written after the guide was mostly complete, and while every effort was made to ensure it can be understood without reading the rest of the guide, this section barely scratches the surface, and the following sections provide lots of background information about everything used here.
+
+## Secure Boot Process
+
+We want to secure the boot process as much as possible from tampering. This goes beyond the UEFI feature called Secure Boot, which is only one link in the chain of trust. Secure Boot can only prevent binaries loaded directly with the EFI LoadImage() and StartImage() methods from running. In our case, this will be the bootloader GRUB, which then loads the Linux Kernel in it's own way. To continue the chain of trust, grub contains it's own method to verify the files it loads (including the kernel) with PGP signatures. It is possible to then have the linux kernel check for signatures on kernel modules it loads, but this third step is not something we will be doing here. All the modules (except those compiled into the kernel image or initramfs, which are already verified by grub) are stored on the encrypted disk which is considered to be trusted.
+
+## Encrypted Disk unlocked via TPM
+
+The disk will be encryped with LUKS, and unlocked automatically with a passphrase stored in the TPM that can only be unlocked if PCRs contain the expected values. The disk will not unlock if any of the PCR values are different, meaning that something in the boot sequence has changed, such as somone with physical access using shim to bypass secure boot, or replacing your kernel image with a malicious one. The TPM's checks on the PCR values are separate from the checks done by secure boot and grub, meaning an attacker would have to bypass both systems to accomplish a boot time attack.
+
+## Two-Factor TPM disk unlock
+
+To add another factor, the TPM Policies we will be creating can be stored on a USB drive that you keep with you. To unlock the disk automatically you'll need the disk itself, the computer with the same physical TPM used to seal the disk key, and the USB drive containing the policy data.
+
+## What is not covered
+
+As mentioned, the linux kernel will not be configured to require signed kernel modules. In fact, this guide only focuses on securing the boot process and securing the data on the disk at rest. Once the system has booted and the disk unlocked (the key for which is stored in kernel-only memory), the security of the system is left to the kernel, and the programs that run on it (eg. a tty login prompt or display manager, plus file system access controls, etc).
+
+## Limitations
+
+There is at least one potential hole in the system. When updating grub, the kernel, or similar, we create a temporary TPM policy incorporating fewer PCR measurements than usual, but it is restricted to working only on the next boot. This allows updates to happen seamlessly as this policy is automatically used to create a more secure policy during the next boot once the updated components have been measured into the PCRs, but does leave a small hole. Technically if you did an update and then shutdown your computer without turning it back on immediately that temporary policy is still sitting there valid and ready to unseal your LUKS passphrase (but only on the next boot) without including PCR measurements for grub, the kernel, or any other linux files that may have changed. If someone gained phyisical access to your computer in this state they could modify or replace your kernel or bootloader with a malicious copies and our boot script would happily create a new authorized policy incorporating PCR measurements of these malicious files. Storing the policy separately on a USB drive helps mitigate this by keeping the less secure policy separate from the disk and TPM. Of course it is even better if you reboot immediately following an update anyway and create a more secure policy.
+
+At the end of the day, "invisible" or "hands off" security systems like the setup described here in this guide that automatically unlock your encrypted disk will never be as secure as more opaque alternatives. You sacrifice some security to convenience. This comes down to determining what your real threat model actually is, and then determining how secure you actually need your computer to be and what attack vectors you need to protect against. If you just used LUKS on it's own and typed in a passphrase at every boot there is no question that would be more secure (assuming a very strong passphrase), but it would certainly be less convenient to have to type in two different strong/long passwords just to get into your computer (the second being your linux user login).
 
 # Installing Arch Linux on an Encrypted Disk alongside Windows with Bitlocker
 
@@ -186,8 +244,9 @@ Assumptions:
 
 - Windows and Linux will reside on separate partitions on the same disk, with a shared EFI system partition.
 - You have already installed Windows, and then used Windows disk manager to shrink `C` and create a new unformatted partition for Linux.
+  - When installing windows, you probably want to make sure your EFI system partition is larger than the default of 100MB, as we will be putting our kernel image and other files in the EFI partition since the root partition will be encrypted. 500MB will give you lots of room, but 200MB is fine if disk space is limited. Check [this superuser answer](https://superuser.com/a/1308330) for instructions on how to create a larger EFI partition during Windows installation. You can probably do the same thing with a linux live disk before installing Windows too.
 
-Doing it this way is suggested as Windows is a lot pickier about drive layout and partition locations, but you are welcome to do it however you want.
+Installing Windows first is suggested as Windows is a lot pickier about drive layout and partition locations, but you are welcome to do it however you want.
 An example partition scheme after doing this might be the following:
 
 - /dev/sda1 - MS Recovery
@@ -250,7 +309,7 @@ cryptsetup luksFormat /dev/sda5 --verify-passphrase --verbose --iter-time 10000
   - requires the passcode to unlock the LUKS partition to be entered twice, similar to other "comfirm your password" mechanisms.  
 - `--verbose` enables verbose mode.  
 - `--iter-time 10000` this manually sets the keyslot iteration time to 10 seconds.  
-  - A keyslot iteration time of 10 seconds means that it will take 10 seconds (based on the speed of your current cpu) to unlock the drive using the passphrase. This is to compensate for a possibly weak passphrase and make it costly for an attacker to brute-force or dictionary attack it because it requires 10 seconds per attempt. The LUKS default is 1 second, in order to balance security and convenience. If you are confident in your passphrase you can choose to omit this and use the default (or set it to another value of your choice). For the configuration shown in this guide, the passphrase set here is considered a backup or fallback, and will not be used very often; thus making the 10 second wait time a nice feature that won't typically add to your boot time. Later we will be setting another passphrase that keeps the default 1 second, and is sealed into the TPM for automated unlocking on boot. Under most circumstances this second passphrase is the one that will be used, and it will be a randomly generated with the TPM's hardware random number generator to ensure that it would be impractical to brute force.
+  - A keyslot iteration time of 10 seconds means that it will take 10 seconds (based on the speed of your current cpu) to unlock the drive using the passphrase. This is to compensate for a possibly weak passphrase and make it costly for an attacker to brute-force or dictionary attack it because it requires 10 seconds per attempt. The LUKS default is 2 seconds, in order to balance security and convenience. If you are confident in your passphrase you can choose to omit this and use the default (or set it to another value of your choice). For the configuration shown in this guide, the passphrase set here is considered a backup or fallback, and will not be used very often; thus making the 10 second wait time a nice feature that won't typically add to your boot time. Later we will be setting another passphrase that keeps the default 2 seconds, and is sealed into the TPM for automated unlocking on boot. Under most circumstances this second passphrase is the one that will be used, and it will be a randomly generated with the TPM's hardware random number generator to ensure that it would be impractical to brute force.
 
 There are a number of other options available surrounding how keys are generated, among other things, but in general the defaults will be more than enough for you unless you are using an older/less powerful computer or have specific requirements such as using something stronger than AES128 (With a keysize of 256 bits, aes in xts mode works out to AES128, as xts operates on a pair of keys).  
 `cryptsetup --help` outputs the defaults that were compiled into your version of the tool.  
@@ -303,7 +362,7 @@ Before you go putting your important data on your encrypted LUKS partition, you 
 cryptsetup luksHeaderBackup /dev/sda5 --header-backup-file my_luks_header
 ```
 
-This command does exactly what it says it does, so an explanation of the arguments is probably not needed here. Just make sure you put this file somewhere safe. Ideally on another drive somewhere.  
+This command does exactly what it says it does, so an explanation of the arguments is probably not needed here. Just make sure you put this file safe on another drive somewhere.  
 See the `cryptsetup` manpage for relevant warnings about header backups. In brief, there are none unless you change your passphrase. If you do, you have to make a new backup, or separately edit the backup, as someone with the backed up header could unlock your partition with the old passphrase otherwise. Remember, the header cannot decrypt anything without knowledge of the passphrase(s) contained in it.  
 For more information on backups, see the `cryptsetup` FAQ, section 6
 
@@ -351,7 +410,7 @@ tpm2-abrmd
 python
 ```
 
-This package set will get you booting and doing everthing in this guide, but not a whole lot else. If you know what other packages you want, install them now (in particular, make sure you install something to allow you connect to a network or you'll have to boot the live disk again just to install more packages later!)
+This package set will get you booting and doing everthing in this guide, but not a whole lot else. If you know what other packages you want, install them now (in particular, make sure you install something to allow you connect to a network such as `dhcpd` or you'll have to boot the live disk again just to install more packages later!)
 
 ### Genfstab
 
@@ -384,9 +443,23 @@ arch-chroot /mnt
 
 See [Timezone](https://wiki.archlinux.org/index.php/Installation_guide#Time_zone), [Localization](https://wiki.archlinux.org/index.php/Installation_guide#Localization), and [Network](https://wiki.archlinux.org/index.php/Installation_guide#Network_configuration)
 
+### Root Password
+
+Don't forget to set your root password! Make sure it's a good one!
+We won't cover creating any users here as it's not needed for a barebones bootable system. Technically the root password isn't either, but if you forget that leaves your system wide open.  
+Just call `passwd` to set it, since you are already the root user.
+
+### Enable tpm2-abrmd service
+
+We installed and started this daemon on the live disk way back at the beginning of the guide. Enabling it now inside the chroot means systemd will automatically start it when we boot into our new system later.
+
+```Shell
+systemctl enable tpm2-abrmd
+```
+
 ### Bootloader
 
-For this system we are using `grub` because it has features like TPM and Secure Boot support that we will need later. For now we will install grub manually, but later we will setup a pacman hook to do it automatically whenenver it gets updated.
+For this system we are using `grub` because it has TPM support that we will need later and otherwise provides a nice menu to work with (if you don't need grub's menu then read up on `EFISTUB` as it could be a simpler and potentially more secure option). For now we will install grub manually, but later we will setup a pacman hook to do it automatically whenenver it gets updated.
 
 ```Shell
 grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB --modules=tpm
@@ -402,26 +475,39 @@ grub-mkconfig -o /boot/grub/grub.cfg
 
 This creates a grub config file that grub will read when it loads at boot. This inclues your menu entries (ones for Arch are auto-genrerated). See [this page](https://wiki.archlinux.org/index.php/GRUB#Configuration) for details.
 
-### Root Password
+### Make the system bootable
 
-Don't forget to set your root password! Make sure it's a good one!
-We won't cover creating any users here as it's not needed for a barebones bootable system. Technically the root password isn't either, but if you forget that leaves your system wide open.  
-Just call `passwd` to set it, since you are already the root user.
+In order to boot with an encrypted disk, we need to make sure there is a way to enter the passphrase at boot to unlock the disk. This will be securely automated over the following sections so that manual entry is not required, but for now we will setup a manual process so you don't get stuck unable to boot without a live disk.
 
-### Enable tpm2-abrmd service
+To do this we can add a simple passphrase prompt to our early boot system with an initramfs hook called `encrypt`. Edit `/etc/mkinitcpio.conf` and add `encrypt` to HOOKS anywhere *after* `keyboard`.  
+Eg: `HOOKS=(base udev autodetect keyboard modconf block filesystems encrypt fsck)`
 
-We installed and started this daemon on the live disk way back at the beginning of the guide. Enabling it now inside the chroot means systemd will automatically start it when we boot into our new system.
+Once you have done that, you'll also need to add a kernel command line argument to your grub configuration to tell `encrypt` where to find your encrypted disk, the documentation for which is found [here](https://wiki.archlinux.org/index.php/Dm-crypt/System_configuration#Boot_loader).  
+Basically, you need to edit `/etc/default/grub` again, and add `cryptdevice=UUID=some-uuid-here:cryptroot` to `GRUB_COMMANDLINE_LINUX_DEFAULT` where `some-uuid-here` is the UUID of your root partition (`/dev/sda5` in our example) as reported by `blkid` and `cryptroot` matches where you mounted the LUKS partition above. Make sure that you use the `PARTUUID` here.  
+Once this is done, regenerate the config again as above in the last section.
+
+Finally, regenerate your initramfs to include the `encrypt` hook that we added to the config. The easiest way to do this is to just re-install the kernel package, which will trigger the initramfs to regenerate in a pacman post transaction hook.
 
 ```Shell
-systemctl enable tpm2-abrmd
+pacman -S linux
 ```
+
+Don't worry about what all this means for now. Initramfs and hooks will be covered in detail later! For now, you should make sure the system is bootable on it's own by shutting down, removing the live disk and attempting to boot. If it doesn't work, you'll need to review the steps above and troubleshoot. If you want to know more about the initramfs and hooks, check out the beginning portion of the "Automating Everything" section.
+
+### Reboot into your new Arch installation
+
+Before going any further, reboot into your new arch installation.
+
+# Prepare a USB flash drive to store TPM files
+
+As mentioned earlier, we will be using a USB flash drive as a second factor required to unlock the disk. This will be done by storing files needed to successfully retrieve the LUKS passphrase from the TPM on the drive. The files will be created in the next section and are useless without the specific TPM that created them so there is no harm storing them on an unencrypted partition. The amount of space required is so small it is recommended that you make a small FAT32 partition on the drive for this purpose and leave the rest for other uses (such as a LUKS encrypted partition for storing private keys). It could be as small as 32MiB, which is the minimum for FAT32 assuming 512 byte sectors. For the purposes of this guide it will be assumed that this drive is mounted at `/mnt`, but feel free to mount it wherever you like. The boot scripts will eventually look for it by the partition UUID to make sure it can always be found (as long as it is plugged in before boot).
 
 # Sealing your LUKS Passphrase with TPM 2.0
 
 In this section we will securely store a LUKS passphrase in the TPM so that we can use it later to automatically unlock our disk. The setup described here only has to happen once, and in the next section we will be automating the maintenance of everything.
 
-*Please note that all file extensions used in this section with `tpm2_*` commands are purely for readability.  
-That said, any files that are saved for later use should retain their names as used here. The install and boot hooks we will be adding expect those files to have the names used here.*
+*Please note that all file extensions used in this section with `tpm2_*` commands (eg. ***\*.policy***) are purely for readability.  
+That said, any files that are saved for later use should retain their names as used here. The install and boot hooks we will be adding expect those files to have the names used here (though some can be configured to use alternate names without code changes).*
 
 ## Mount a Ramfs as a working directory
 
@@ -460,7 +546,7 @@ There are many more options for this command, but in this case we are sticking t
 
 - Hierarchy: Owner
 - Algorithm: `rsa2048:null:aes128cfb`
-  - Many TPMs won't offer much better than this as the spec doesn't require it. Depending on which version of the spec your TPM conforms to, it may also have `aes256` but it is recommended to use algorithms with matching key strengths (`rsa2048`'s 112 bits considered close enough to `aes128`'s 128 bits, though `rsa3072`'s 128 bits would be a better match most TPMs do not support it). `rsa16384` would be required for a 256 bit key strength to match `aes256`. You can check which algorithms your tpm supports using the [tpm2_testparms](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_testparms.1.md) command.
+  - Many TPMs won't offer much better than this as the spec doesn't require it. Depending on which version of the spec your TPM conforms to, it may also have `aes256` but it is recommended to use algorithms with matching key strengths (`rsa2048`'s 112 bits considered close enough to `aes128`'s 128 bits. `rsa3072`'s 128 bits would be a better match but most TPMs do not support it). `rsa16384` would be required for a 256 bit key strength to match `aes256`. You can check which algorithms your tpm supports using the [tpm2_testparms](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_testparms.1.md) command.
 - Hash Algorithm: `sha256`
 - Attributes: `restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda`
 - Authorization Policy: null, which means it can never be satisfied.
@@ -468,7 +554,7 @@ There are many more options for this command, but in this case we are sticking t
 ## Add Authorization for Dictionary Attack Lockout
 
 All Heirarchies have authorization values and/or policies that allow the generation of keys with their seeds, among other things, but these are typically not set for the Owner Hierarchy to allow it's use by multiple programs and users. If you lock it down, it is unlikely that bitlocker will be functional as it probably also uses the Owner Hierarchy (this was not tested, but is how the TPM specification expects the TPM to be used). The Endorsement Hierarchy is not used for this guide and will not be covered. The Platform Hierarchy's authorization is cleared on every boot, and it is expected that the BIOS or some other low-level firmware sets this early in the boot process, which means that the end user typically doesn't have access to the Platform Hierarchy.
-In addition to the hierarchy authorizations, the TPM also has a Dictionary Attack (DA) Lockout mechanism that prevents dictionary attacks on the authorization values for primary keys and their children. Note that this mechanism does NOT affect hierarchy authorization values. The DA lockout also has an authorization value and/or policy that can be used to reset the lockout, as well as a few other administrative commands.  
+In addition to the hierarchy authorizations, the TPM also has a Dictionary Attack (DA) Lockout mechanism that prevents dictionary attacks on the authorization values for primary keys and their children. Note that this mechanism does NOT protect hierarchy authorization values. The DA lockout also has an authorization value and/or policy that can be used to reset the lockout, as well as a few other administrative commands.  
 Recall how we created our primary key. We are relying on being able to regenerate it whenever we need to, so we need to make sure that the Owner Hierarchy Seed doesn't change or our key can never be regenerated. The seed can be reset with the [tpm2_clear command](https://github.com/tpm2-software/tpm2-tools/blob/master/man/tpm2_clear.1.md), which will clear all objects from the TPM and reset the heirarchy seeds. This command can be activated with either the Platform Hierarchy authorization or the DA Lockout authorization, but since we have no control over the Platform Hierarchy, it is the DA Lockout authorization that we need to worry about. Setting an authorization value on the DA lockout not only prevents `tpm2_clear` from being run by anyone else, but it also prevents the lockout from being reset, both of which are important for security.
 
 ### Generate the DA Lockout authorization value
@@ -485,11 +571,11 @@ tpm2_getrandom 32 > dictionary-attack-lockout-authorization.bin
 tpm2_setprimarypolicy --hierarchy l --auth file:dictionary-attack-lockout-authorization.bin
 ```
 
-- `--hierarchy l` identifies the DA Lockout "hierarchy" as the one to set the authorization on.
+- `--hierarchy l` identifies the DA Lockout "hierarchy" as the one to set the authorization on (that's a lowercase L, not a 1).
   - The Dictionary Attack Lockout isn't really a hierarchy, but it's authorization is set with the same command as the hierarchies.
 - `--auth file:dictionary-attack-lockout-authorization.bin` sets the authorization value for the given "hierarchy".
 
-It is also possible to set a policy, in addition to the authorization value, however this is not done for simplicity. For any TPM object, the default authorization value is empty string, which allows anyone in, but the default policy is null, which can never be satisfied. Therefore it is critical to at least set the authorization value, but not necessarily the policy.
+It is also possible to set a policy, in addition to the authorization value, however this is not done here for simplicity. For any TPM object, the default authorization value is empty string, which allows anyone in, but the default policy is null, which can never be satisfied. Therefore it is critical to at least set the authorization value, but not necessarily the policy.
 
 **WARNING**  
 Do not loose this authorization value!!  
@@ -523,7 +609,7 @@ In order to create a wildcard policy, we need an authorization key that will be 
 
 ### Create an access value for the policy authorization key
 
-*To better differentiate terminology, the authorization vaue for our policy authorization key will be referred to as an **access value** from here on.*
+*To better differentiate terminology, the authorization value for our policy authorization key will be referred to as an **access value** from here on.*
 
 Similar to previously, the access value will be generated with the TPM:
 
@@ -586,20 +672,21 @@ The options given to this command are fairly self explanitory given what we have
 
 ### Store the policy authorization key in the TPM permanently
 
-We will be using the policy authorization key every time we unseal the disk (to verify the signature on the signed policy), so it is easiest to store it permanently in the TPM.
+We will be using the policy authorization key every time we unseal the disk (to verify the signature on the signed policy), so it is easiest to store it permanently in the TPM. To do this, we use the `tpm2_evictcontrol` tool. It is not clear why the tool is called that beyond the tool's name matching the internal TPM command's name. Possibly this is a reference to the TPM taking control of the object when you persist it, and "evicting" it from the NVRAM when you remove it (the same command does both).
 
 ```Shell
 tpm2_evictcontrol --object-context policy-authorization-key.context --output policy-authorization-key.handle
 ```
 
-This is the same as when we persisted the primary key.
+- `--object-context policy-authorization-key.context` specifies the object that should be permanently stored in the TPM.
+- `--output policy-authorization-key.handle` saves the interal handle (NVRAM address) where the object was stored to a file that can later be used to reference that object, like a context file except it works across boots.
 
-Since the key will be needed before unlocking the disk, we copy the handle file to `/boot/tpm2_encrypt` (recall we bind mounted `/boot` to `/efi/EFI/arch`). `tpm2_encrypt` is the name of the `mkinitcpio` hook we will be creating shortly to unlock the disk automatically.
+Since the key will be needed at boot before unlocking the disk, we copy the handle file to `/mnt/tpm2_encrypt` (recall we are assuming your second factor USB flash drive is mounted at `/mnt`). `tpm2_encrypt` is the name of the `mkinitcpio` hook we will be creating shortly to unlock the disk automatically.
 
 ```Shell
-mkdir /boot/tpm2_encrypt
+mkdir /mnt/tpm2_encrypt
 
-cp policy-authorization-key.handle /boot/tpm2_encrypt/policy-authorization-key.handle
+cp policy-authorization-key.handle /mnt/tpm2_encrypt/policy-authorization-key.handle
 ```
 
 We will also copy a backup of the handle file to `/root/keys` and restrict it's access as with the access key.
@@ -610,7 +697,7 @@ cp policy-authorization-key.handle /root/keys/policy-authorization-key.handle
 chmod 400 /root/keys/policy-authorization-key.handle
 ```
 
-Storing the handle file in the clear on the efi partition is not a security issue as it simply refers to the key's location in the TPM NVRAM. It does *not* provide access to the private area of the key (and the public area is always available anyway, through `tpm2_nvreadpublic` and `tpm2_readpublic`).
+Storing the handle file in the clear on the USB flash drive is not a security issue as it simply refers to the key's location in this TPM's NVRAM. It does *not* provide access to the private area of the key (and the public area is always available anyway, if you have access to the TPM it is in, through `tpm2_nvreadpublic` and `tpm2_readpublic`).
 
 ### Get the authorization key's name
 
@@ -623,12 +710,10 @@ tpm2_readpublic --object-context policy-authorization-key.handle --name policy-a
 - `--object-context policy-authorization-key.handle` specifies the TPM object to read the public area of.
 - `--name policy-authorization-key.name` saves the name portion of the public area to a file.
 
-As with the handle, we will need this name at boot before unlocking the disk, so we copy it to the EFI partition:
+As with the handle, we will need this name at boot before unlocking the disk, so we copy it to the USB flash drive:
 
 ```Shell
-mkdir /boot/tpm2_encrypt
-
-cp policy-authorization-key.name /boot/tpm2_encrypt/policy-authorization-key.name
+cp policy-authorization-key.name /mnt/tpm2_encrypt/policy-authorization-key.name
 ```
 
 We will also copy a backup of the name file to `/root/keys` and restrict it's access.
@@ -648,7 +733,7 @@ tpm2_startauthsession --hash-algorithm sha256 --session seal-wilcard-policy.sess
 ```
 
 - `--hash-algorithm sha256` specifies the hash algoritm to use for the session (all auth sessions are variations of HMAC sessions).
-- `--session seal-wilcard-policy.session` specifies the file to save the session to.
+- `--session seal-wilcard-policy.session` specifies the file to save the session to so it can be used in subsequent commands.
 
 This tool starts a trial session by default. `--policy-session` is required to start a real session.
 
@@ -686,7 +771,7 @@ This is almost identical to how the Policy Authorization Key was created, so onl
   - The final attribute here ensures the sealed object can only be unsealed with a policy.
 - `--sealing-input tpm-luks-passphrase.bin` passes the previously created LUKS passphrase as the data to be sealed in the object.
 - `--policy seal-wilcard-policy.policy` sets the policy of the sealed object to the wildcard policy created previously.
-- Default Key Algorithm: `hmac:null:null` (sealed data can only be a keyed hash).
+- Default Key Algorithm: `hmac` (sealed data can only be a keyed hash).
 - Default Hash Algorithm: sha256
 
 If you encountered an error with `tpm2_create` previously, repeat the same steps here to create the key and then load it into the TPM in a separate command.
@@ -698,7 +783,7 @@ As with the Policy Authorization Key, this sealing object will be used at every 
 ```Shell
 tpm2_evictcontrol --object-context sealed-passphrase.context --output sealed-passphrase.handle
 
-cp sealed-passphrase.handle /boot/tpm2_encrypt/sealed-passphrase.handle
+cp sealed-passphrase.handle /mnt/tpm2_encrypt/sealed-passphrase.handle
 
 cp sealed-passphrase.handle /root/keys/sealed-passphrase.handle
 
@@ -709,11 +794,11 @@ chmod 400 /root/keys/sealed-passphrase.handle
 
 At this point we have sealed the LUKS passphrase in a TPM object that is restricted with a policy that must be satisfied by another policy that is authorized (signed) with a key. In order to statisfy this policy, we must create a second policy and sign it. The second policy will be created such that it is satisfied only if the values of certain PCRs are the same as when the policy was created. However, since we are still running on a live disk (if you have been following this guide from the beginning), the current values of most of the PCRs are not the ones that will be found on our new Arch system. There are a few that can be expected not to change in this case, such as PCR 0, which is the BIOS code, but creating a signed policy that is satisfied by only a few PCR values leaves our sealed LUKS passphrase vulnerable if anyone ever got ahold of that policy.
 
-Since we need the policy at early boot, it is easiest to store it in the EFI system partition, just as we did with the handles for the two objects we saved in the TPM. As long as the policy is strong, this is secure because the policy file is nothing more than a digest (of PCR values in this case). The user (or the automated script we will be using later) must re-create the digest with a real authorization session by adding the same PCR values that went into the original, after which the TPM will compare the two digests. The policy is satisfied if they match. Normally a policy is stored as part of the TPM object, however this one is stored in a file because it will be used to satisfy the wildcard policy that is stored in the TPM object. Since the policy is accompanied by a signature from the authorization key, nobody can tamper with it without causing the signature to fail verification. However if the policy is weak (such as by only requiring a couple PCR values), then there is no need for tampering since it will be easy to satisfy while making malicious changes to other parts of the boot configuration.
+Since we will need this policy at boot to unseal the LUKS passphrase, we will store it on the USB flash drive, just as we did with the handles for the two objects we saved in the TPM. The policy file is nothing more than a digest (of PCR values in this case) so storing it on the unencrypted flash drive is harmless so long as the policy requires a robust set of PCR values. In addition, it is useless unless paired with this specific TPM so storing them separately adds to the overall security. To use the policy the user (or the automated script we will be using later) must know the 'recipie' and re-create the policy digest with a real authorization session by adding the same PCR values that went into the original, after which the TPM will compare the two digests. The policy is satisfied if they match. Normally a policy is stored as part of the TPM object, however this one is stored in a file because it will be used to satisfy the wildcard policy that is stored in the TPM object. Since the policy is accompanied by a signature from the authorization key, nobody can tamper with it without causing the signature to fail verification. However if the policy is weak (such as by only requiring a couple PCR values), then there is no need for tampering since it will be easy to satisfy while making malicious changes to other parts of the boot configuration.
 
 To mitigate this vulnerbility while also maintaining convenience, we can create a temporary policy that will only work on the next boot, and never again afterward. This is possible because the TPM has an internal 32-bit counter that is incremented on every boot, never decremented, and can't be reset without running `tpm2_clear` which requires authorization and would also clear our sealed key from the TPM (see previous section about the Dictionary Attack Lockout Authorization). We can create a policy that includes a requirement that the value of the boot counter be exactly one plus the current value such that it can only be satisfied on the next boot (in addition to a couple PCR values that we do not expect to change under most circumstances, like PCR 0).
 
-This strategy will also be used whenever we install an upate for the kernel or the boot loader, though it will be done automatically in install hooks that we will setup later. Whenever we boot, an `initramfs` script (also to be setup later) will look first for a "more secure" policy that works, and failing that (such as when we install a kernel update), it will look for a temporary policy as described above. If this temporary policy is satisfied then it will automatically create a new "more secure" policy with the new PCR values that incorporate the updated kernel (once it unlocks the disk with the temporary policy and gains access to the signing key). We can take advantage of this automated policy creation in our initial setup too, by manually creating a temporary policy now and then letting the `initramfs` script automatically create the "more secure" policy when we reboot into our new arch system for the first time.
+This strategy will also be used whenever we install an upate for the kernel or the boot loader, though it will be done automatically in install hooks that we will setup later. Whenever we boot, a script (also to be setup later) will look first for a "more secure" policy that works, and failing that (such as when we install a kernel update), it will look for a temporary policy as described above. If this temporary policy is satisfied then it will automatically create a new "more secure" policy with the new PCR values that incorporate the updated kernel (once it unlocks the disk with the temporary policy and gains access to the signing key). We can take advantage of this automated policy creation in our initial setup too, by manually creating a temporary policy now and then letting the boot script automatically create the "more secure" policy when we reboot into our new arch system for the first time.
 
 ### Create a temporary policy
 
@@ -732,7 +817,7 @@ tpm2_policypcr --pcr-list sha256:0,1,2,3,7 --session temporary-authorized-policy
 
 - `--pcr-list sha256:0,1,2,3,7` specifies the use of PCRs 0-3 and 7 from the sha256 bank.
   - Many TPMs support multiple banks of PCRs that use different algorithms. At minimum there is usually sha1 and sha256. To check what your TPM has allocated, run `tpm2_pcrread`.
-  - If your TPM only has sha1, adjust this option accordingly. The `initramfs` script will use sha256 by default but an alternative can be specified on the kernel command line.
+  - If your TPM only has sha1, adjust this option accordingly. The boot script will use sha256 by default but an alternative can be specified on the kernel command line.
 - `--session temporary-authorized-policy.session` specifies the trial session we just created.
 
 Add the boot counter + 1 requirement using some `sed` magic to get the current boot counter:
@@ -745,7 +830,7 @@ tpm2_policycountertimer --session temporary-authorized-policy.session --policy t
 - `--policy temporary-authorized-policy.policy` specifies the file where the final policy should be saved.
 - `--eq` specifies an equality comparison.
 - `resets=<see above>` specifies that the comparison should be done with the restarts counter and the value it should be compared with.
-  - Note that the `=` here has nothing to do with the type of comparison to be done, which happens to be equality in this case.
+  - Note that the `=` here has nothing to do with the type of comparison to be done, which just happens to be equality in this case.
   - The shell expansion is trimmed here for readability, but it basically uses `tpm2_readclock` to get the current `reset_count` and adds one. For example, if the current `reset_count` is 156, then this argument would boil down to `resets=157`
 
 After creating the policy, we flush the session from the TPM memory:
@@ -770,17 +855,429 @@ tpm2_sign --key-context policy-authorization-key.handle --auth file:policy-autho
 - `--signature temporary-authorized-policy.signature` specifies the file to save the signature in.
 - `temporary-authorized-policy.policy` specifies the value to be signed.
 
-### Copy the policy and its signature to /boot/tpm2_encrypt
+### Copy the policy and its signature to /mnt/tpm2_encrypt
 
-We will need these files to unlock the drive at boot, so they are copied to the EFI partition.
+We will need these files to unlock the drive at boot, so they are copied to the USB flash drive.
 
 ```Shell
-cp temporary-authorized-policy.policy /boot/tpm2_encrypt/temporary-authorized-policy.policy
+cp temporary-authorized-policy.policy /mnt/tpm2_encrypt/temporary-authorized-policy.policy
 
-cp temporary-authorized-policy.signature /boot/tpm2_encrypt/temporary-authorized-policy.signature
+cp temporary-authorized-policy.signature /mnt/tpm2_encrypt/temporary-authorized-policy.signature
 ```
 
 There is no need to save these files elsewhere since they won't work again.
+
+## Testing everything so far
+
+Now that we have our second LUKS passphrase sealed into the TMP, we should test and make sure everything is working so far. To do this, we can make a simple policy to unseal the passphrase with. This policy will be like he temporary one above, except without the boot counter requirement, so please make sure it is **NOT** persisted anywhere as this could compromise the whole setup (the assumption is you are still working in the ramdisk we have been using thus far).
+
+### Create and sign the test policy
+
+All these commands have been covered above, so they will just be listed here:
+
+```Shell
+tpm2_startauthsession --hash-algorithm sha256 --session test-authorized-policy.session
+
+tpm2_policypcr --pcr-list sha256:0,1,2,3,7 --session test-authorized-policy.session --policy test-authorized-policy.policy
+
+tpm2_flushcontext test-authorized-policy.session
+
+tpm2_sign --key-context policy-authorization-key.handle --auth file:policy-authorization-access.bin --hash-algorithm sha256 --scheme rsapss --signature test-authorized-policy.signature test-authorized-policy.policy
+```
+
+### Verify the policy
+
+Here we will use the policy we just created to unseal the passphrase we sealed into the TMP, and then have `cryptsetup` verify that it is a valid passphrase for our disk. First, we need to verify the sinature we just created, and produce a validation ticket.
+
+```Shell
+tpm2_verifysignature --key-context policy_authorization_key.handle --hash-algorithm sha256 --message test-authorized-policy.policy --signature test-authorized-policy.signature --ticket test-authorized-policy.tkt
+```
+
+- `--key-context policy_authorization_key.handle` specifies the key in the TMP that was used to sign the message being verified.
+- `--hash-algorithm sha256` specifies the hash algorithm used when signing. This *must* match what was used when tpm2_sign was called.
+- `--message test-authorized-policy.policy` specifies the "message" or file that was signed.
+- `--signature test-authorized-policy.signature` specifies the signature of the message that should be checked.
+- `--ticket authorized-policy.tkt` specifies the file to output the verification ticket to.
+  - This ticket is passed to subsequent commands to confirm the validity of the file being passed to them (in this case the policy).
+
+### Create a real auth session
+
+Next we need to create a ***real*** auth session that can be used for authentication with the TMP.
+
+```Shell
+tpm2_startauthsession --hash-algorithm sha256 --policy-session --session test-authorzation.session
+```
+
+  `--policy-session` specifies that this session should be a *real* auth session that can be used for authentication with the TPM.  
+  Other options here have already been covered above.
+
+### Recreate the policy in the real auth sesson
+
+Next we have to re-create the policy in this *real* session. This is how the TMP verifies policies — by comparing the policy hash in the *real* auth session with the one embedded in the TMP object (which in this case is the wildcard policy). With wildcard policies, `tpm2_policyauthorize` is used to compare the hash in the session with the one in the external policy file (that has been verified with `tpm2_verifysignature` to be signed with the key that the wildcard policy allows). If the verified external policy's hash matches the one in the session, the hash in the session is replaced with the hash of the wildcard policy, thus allowing this session to unseal our passphrase.
+
+```Shell
+tpm2_policypcr --pcr-list sha256:0,1,2,3,7 --session test-authorzation.session
+
+tpm2_policyauthorize --session test-authorzation.session --input test-authorized-policy.policy --name policy-authorization-key.name --ticket test-authorized-policy.tkt
+```
+
+- `--input test-authorized-policy.policy` specifies the policy being verified.
+- `--ticket test-authorized-policy.tkt` specifies the verification ticket produced above.
+
+Other options have already been covered.
+
+### Unseal and test the passphrase
+
+Our auth session is now ready to unseal our passphrase (assuming you haven't encountered any errors so far). We do this with `tpm2_unseal`:
+
+```Shell
+tpm2_unseal --auth session:test-authorzation.session --object-context sealed-passphrase.handle | cryptsetup open /dev/sda5 --test-passphrase && echo "success!"
+```
+
+- `--auth session:test-authorzation.session` specifies the session that is used to authorize the unseal.
+  - This could also be a key's auth value if it didn't use policy based authorization.
+- `--object-context sealed-passphrase.handle` specifies the object to unseal.
+
+The output of `tpm2_unseal` is printed to STDOUT by default, and we pipe this directly into cryptsetup, where we use the `--test-passphrase` option of the `open` action to check the passphrase without doing anything else. This test will simply return 0 (success) if the passphrase is good, so we echo some feedback if this is the case so we know it worked.
+
+Hopefully this test went well for you. If not, you'll have to double check the documentation, re-read above, and troubleshoot. If you need to re-do the steps in this section you should probably use `tpm2_evictcontrol` to delete the objects we persisted to the TMP the first time around so you don't have stray objects stored.
+
+# Securing the boot process
+
+This section can be completed either using an Arch Linux live disk, or an already installed Arch Linux system. You are responsible for installing any needed packages (if you've been following from the beginning you already have everything), and for ensuring the security of your private keys (to be generated below).
+
+## Taking Control of Secure Boot
+
+Before getting into how to take control of secure boot, read at least the first two sections of [Rod's Guide to Controlling Secure Boot](http://www.rodsbooks.com/efi-bootloaders/controlling-sb.html) before proceeding to get a better background on how secure boot works.  
+Another excellent resource is [this guide from the Funtoo Wiki](https://www.funtoo.org/Secure_Boot), or [this archived page from the Gentoo Wiki](https://web.archive.org/web/20201005194738/https://wiki.gentoo.org/wiki/Sakaki's_EFI_Install_Guide/Configuring_Secure_Boot).
+All of these are similar to this section in that they will show you how to take control of secure boot. Feel free to use them instead of this one if they work for you. In particular, this guide only describes one pathway and set of tools to configure secure boot (though it is the pathway that will hopefully work in the most cases). If it doesn't work for your hardware/firmware, those guides have other variations that may work.  
+If you do follow one of those guides instead, make sure to come back here for the remaining sections where we set up some pacman hooks to automate the signing of our bootloader with the new secure book keys, among other important things.
+
+### Generating New Secure Boot Keys
+
+Assuming you are still here, the first step to take control of secure boot on your machine is to generate new secure boot keys of your own. In this guide we will also be retaining the default keys so you can still boot Windows and get firmware updates with secure boot on. If you have decided not to retain those keys it should be easy to skip the relevant sections below.  
+To generate a new Platofrm Key (PK), Key Exchange Key (KEK), and Database Key (db), you can use `openssl`. The examples in this guide will be using `openssl 1.1.1`, which is the latest Long Term Support release at the time of writing.
+
+The following command will produce an RSA 2048 private key, and a matching public key certificate.
+
+```Shell
+openssl req -new -x509 -newkey rsa:2048 -keyout PK.key -out PK.crt -days 10000 -nodes
+```
+
+- `req` is the `openssl` certificate request tool.
+- `-new` tells `req` to create a new certificate request.
+- `-x509` tells `req` to actually create a certificate rather than just a request for one.
+- `-newkey rsa:2048` tells openssl to generate a new private key using RSA 2048.
+- `-keyout PK.key` specifies the output file for the private key.
+- `-out PK.crt`  specifies the output file for the certificate.
+- `-days 10000` specifies how long the certificate should be valid for.
+  - Since we are putting this certificate in our computer firmware, we want it to last a while. Will you still have this computer in ~27.3 years?  
+- `-nodes` this tells openssl to not encrpyt the private key. If you want to encrpyt it with a password, remove this option and you will be prompted.
+  - For the PK and KEK, you should store these keys somewhere separate like a LUKS encrypted flash drive.
+  - For the db key, you will need access to it regularly to sign versions of efi binaries. We'll store it inside your encrypted disk with file and folder permissions set to root only, just like the policy-authorization-access key. This way our automated scripts can still use it without you entering a password (which would defeat the point of hands off automated scripts). If someone gets root access to your machine you have bigger problems anyway.
+
+When you run this command you will be prompted to enter some details about yourself as the issuer of the certificate. You can put as little or as much as you want here, but at least set the common name and/or organizaton. These can also be set from the above command with, for example, `-subj /CN=your common name/O=your org name/` if you do not want to do it interactively.  
+Unfortunately it is difficult to find a good list of all values that can go in here. They are listed in [RFC 5280 section 4.1.2.4](https://tools.ietf.org/html/rfc5280#section-4.1.2.4), but the short names are not included there. You can find some of them on [this SO post](https://stackoverflow.com/questions/6464129/certificate-subject-x-509).  
+As an example, this is the subject/issuer you'll find in the default PK on a lenovo thinkpad from 2016: `/C=JP/ST=Kanagawa/L=Yokohama/O=Lenovo Ltd./CN=Lenovo Ltd. PK CA 2012`
+
+#### Generate the keys
+
+Run the above command three times, generating a PK, KEK, and db key.
+
+```Shell
+openssl req -new -x509 -newkey rsa:2048 -keyout PK.key -out PK.crt -days 3650 -nodes -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd PK/"
+
+openssl req -new -x509 -newkey rsa:2048 -keyout KEK.key -out KEK.crt -days 3650 -nodes -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd KEK/"
+
+openssl req -new -x509 -newkey rsa:2048 -keyout db.key -out db.crt -days 3650 -nodes -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd db/"
+```
+
+Make sure you store the private keys (`.key`) in a safe place (might as well keep the certificates too). You will need the db key and certificate regularly to re-sign your bootloader, so copy that one to `/root/keys` like we did with certain files in the TPM section, and `chmod 400` it so that only root can read it, and can't overwrite it:
+
+```Shell
+cp db.key /root/keys/db.key
+cp db.crt /root/keys/db.crt
+
+chmod 400 /root/keys/db.key
+chmod 400 /root/keys/db.crt
+```
+
+### Converting the certificates to EFI signature list format
+
+The certificates generated are not in the format needed by the tools we will use to install them in the frimware. To fix this we will use some utilities from the `efitools` package. The version we are using here is `1.9.2`.  
+We want to convert our certificates to EFI Signature List (`.esl`) format. To do this, the following command is used:
+
+```Shell
+cert-to-efi-sig-list -g <your guid> PK.crt PK.esl
+```
+
+- `-g <your guid>` is used to provide a GUID to identify the owner of the certificate (you). If this is not provided, an all zero GUID will be used.
+- `PK.crt` is the input certificate.
+- `PK.esl` is the output esl file.
+
+#### Generate a GUID
+
+In order to provide our own GUID for the certificate owner, we have to generate one. There is a multitude of ways to do this, but in this case a one line python script will do the trick:
+
+```Shell
+GUID=`python -c 'import uuid; print(str(uuid.uuid1()))'`
+echo $GUID > GUID.txt
+```
+
+The first line generates the GUID and assigns it to a shell variable called GUID, the second line echos the value into a text file so we can keep it beyond the current shell session.
+
+#### Convert the certificates
+
+Run the above command to convert each of the three certificates, also adding the GUID we just generated:
+
+```Shell
+cert-to-efi-sig-list -g $GUID PK.crt PK.esl
+
+cert-to-efi-sig-list -g $GUID KEK.crt KEK.esl
+
+cert-to-efi-sig-list -g $GUID db.crt db.esl
+```
+
+### Preserving the default KEK and db, and dbx entries
+
+Since we want to be able to dual boot Windows 10, it is important that we preserve the default KEK, db, and dbx entries from Microsoft and the computer manufacturer. Maintaining Microsoft's keys will ensure that Windows can still boot, and maintaining the manufacturer keys will ensure we can still install things like EFI/BIOS updates, which are often distributed as EFI binaries signed by the manufactuer's key, that run on reboot to update the firmware. It is especially important that we preserve the dbx entries if we are keeping the Microsoft keys, as the dbx contains a black list of signed efi binaries (mostly all signed by Microsoft) that are not allowed to run, despite being signed by an certificate in the db (one of the Microsoft keys). "But I only need the db and dbx keys for this" you might be thinking. True, but if we do not keep the KEKs too, you cannot benefit from updates to the db and dbx issued by Microsoft or your computer manufacturer. Removing the manufacturer's PK does prevent them from issuing new KEKs, but this is much less likely, and if you want to take control of secure boot there is no way around replacing the PK, unless you have access to the private key it was made with.  
+Finally, while most firmware has an option to restore factory default keys, if yours does not, you may want to keep these keys for that usecase too.
+
+To preserve the existing keys, we will use another utility from `efitools` called `efi-readvar`. This utility runs in Linux user-space and can read efi secure variables such as the secure boot variables:
+
+```Shell
+efi-readvar -v PK -o original_PK.esl
+```
+
+- `-v PK` specifies the efi variable to read
+- `-o original_PK.esl` file to output the contents to (notice this is also in `.esl` format.)
+
+#### Copy Original Keys
+
+Run the above command for each of PK, KEK, db, and dbx
+
+```Shell
+efi-readvar -v PK -o original_PK.esl
+
+efi-readvar -v KEK -o original_KEK.esl
+
+efi-readvar -v db -o original_db.esl
+
+efi-readvar -v dbx -o original_dbx.esl
+```
+
+#### Append original keys to new keys
+
+With the `.esl` file format, we can easily merge our new keys with the existing ones by simply concatenating the files:
+
+```Shell
+cat KEK.esl original_KEK.esl > all_KEK.esl
+
+cat db.esl original_db.esl > all_db.esl
+```
+
+### Signing the EFI signature list files
+
+While we don't technically need to do this step, since the firmware will accept any keys in secure boot setup mode (we'll get to that later), it is more correct to use signed update files.  
+If you want to add a KEK or db entry after secure boot is no longer in setup mode, you'll have to sign it with the next highest key so let's do that now as practice. The PK can sign itself, and is considered the root of trust, just like the root certificate from a certificate authority such as entrust or lets encrypt. The following command is used to sign the signature lists:
+
+```Shell
+sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl PK.auth
+```
+
+- `-k PK.key` specifies the private key for the certificate.
+- `-c PK.crt` specifies the certificate to sign with.
+- `PK` is the EFI variable the output is intended for.
+- `PK.esl` is the EFI signature list file to sign.
+- `PK.auth` is the name of signed EFI signature list file, with a `.auth` extension indicating that it has an authentication header added.
+
+#### Sign the files
+
+Run the above command for each `.esl` file:
+
+```Shell
+sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl PK.auth
+
+sign-efi-sig-list -k PK.key -c PK.crt all_KEK KEK.esl all_KEK.auth
+
+sign-efi-sig-list -k KEK.key -c KEK.crt db all_db.esl all_db.auth
+
+sign-efi-sig-list -k KEK.key -c KEK.crt dbx dbx.esl dbx.auth
+```
+
+The PK signs itself, the PK also signs the KEKs, and our KEK (the only one we have the private key for) signs the db and dbx keys. Note that since we don't have anything to add to the dbx, we just sign the original list.  
+Our db key is later used to sign EFI binaries that we want to boot, the KEK is used if we want to add new db entries, and the PK is used if we want to add new KEK entries.
+
+### Installing the new Secure Boot Keys
+
+The first step here is to put secure boot into setup mode by removing the current PK. This can be done from the BIOS setup utility, but beyond that, the exact steps differ greatly accross hardware. Typically there will be a security section, and in that, a secure boot section. This is where you would have turned secure boot off in order to install Arch Linux initially or to boot the live disk. Look for an option to put secure boot into setup mode, or an option to delete all secure boot keys. *If you see both, delete all keys*, as this often prevents certain issues with the tool we will be using (we saved all the old keys and will be replacing them anyway). Some firmware may require a firmware password to be set before these options are shown. Setup mode is on when there is no PK. Once a new PK is set, secure boot turns back to user mode, and any updates to any of the secure variables must by signed by the next highest key.
+> Quick note: you may see a reference to `noPK.esl` or similar in Rod's guide and the Gentoo wiki (both linked at the start of this section). This is an empty file signed with the PK that can be used to "update" the PK to nothing (remove the PK) while in user mode, thereby putting secure boot back into setup mode without entering the BIOS setup utility. This works because the PK can be updated in user mode as long as the update is signed by the current PK. Unless you are changing your keys often, you likely won't need this.
+
+Once secure boot is in setup mode, we can use an `efitools` utility called `efi-updatevar` to replace each of the secure variables:
+
+```Shell
+efi-updatevar -f PK.auth PK
+```
+
+- `-f PK.auth` specifies the file to update the variable with. `PK.auth` is the efi signature list (signed in this example) that will be set on the variable.
+  - If you wan to use a .esl file here, you need to also add a `-e` before or after this.
+- `PK` is the secure variable we want to update
+
+*NOTE:* This command as written will **replace** all the values in the variable. It is possible to instead append with `-a` but this seems to have problems on some firmware, while just replacing everything usually works, and in this case we added the old keys to ours and (ideally) cleared out all the secure variables before starting anyway. The reason it is ideal to clear out all the variables before starting is also because some firmware will not accept a replacement if there is a value present. Clearing all the keys and using the replacement command above appears to work in the most cases.
+
+#### Install new secure boot keys
+
+Run the above command for dbx, db, KEK, and PK, preferably in that order, but just make sure the PK is last so that we keep setup mode active.
+
+```Shell
+efi-updatevar -f dbx.auth dbx
+
+efi-updatevar -f all_db.auth db
+
+efi-updatevar -f all_KEK.auth KEK
+
+efi-updatevar -f PK.auth PK
+```
+
+Since we signed our efi signature lists and created auth files we should theoretically be able to update the KEK, db, and dbx even after setting the PK (which takes us out of setup mode), but `efi-updatevar` seems to have trouble doing this at least on the machine used as a testbed for this guide. There are other tools that work better for updating with signed esl files (`.auth`) when secure boot is in user mode. For example `KeyTool`, also from `efitools` seems to work fairly well, however it is an efi binary so you have to reboot to use it (like your BIOS setup), which is more cumbersome.
+
+### Test your new secure boot keys
+
+If you successfully completed all of the above sections, you now have your own keys added to secure boot, so you can start signing bootloaders and other efi binaries with your db key!  
+If you want to quickly test your handywork `efitools` supplies a `HelloWorld` efi binary that you can sign and try to boot into. Assuming your efi system partition is mounted at `/efi` as we setup earlier, we can use a tool called `sbsign` from the `sbsigntools` package to sign the efi binary like so:
+
+```Shell
+mv /efi/EFI/Boot/bootx64.efi /efi/EFI/Boot/bootx64-prev.efi # Rename the existing default boot entry so that we can restore it later.
+
+sbsign --key db.key --cert db.crt --output /efi/EFI/Boot/bootx64.efi /usr/share/efitools/efi/HelloWorld.efi
+```
+
+- `--key db.key` specifies the private key to sign the file with.
+- `--cert db.cry` specifies the public certificate for the given private key that was added to secure boot.
+- `--output /boot/EFI/Boot/bootx64.efi` specifies where to save the signed version of the file.
+- `/usr/share/efitools/efi/HelloWorld.efi` specifies the file to sign.
+
+After running this, reboot, and enter BIOS setup. Enable secure boot and move your boot drive to the top of your boot order (above grub). When you exit setup it should try to boot the HelloWorld binary sinice it is in the efi default location for that drive, and becasue we signed it, it should work. If it doesn't, then something went wrong up above.  
+To get back to linux, just put grub back at the top of your boot order.  
+**Don't forget to replace the hello world binary with the file that used to be there!**
+
+## Securing the BIOS
+
+**Important!**
+
+Now that we have setup secure boot, we need to make sure unauthorized users cannot just turn it off. To do this, set an administrator password on your BIOS configuration. Every BIOS is a little different so the specifics can't be covered here, but if you don't do this, you will severly impact the benefit of using secure boot!
+
+## Securing grub
+
+Now that we have added our own secure boot key we can use it to sign our grub binary in order to ensure with reasonable confidence that it has not been tampered with (the actual signing will be done in the next section). In addition to grub itself, we also want to have reasonable confidence that the other files loaded by grub have not been tampered with, such as the grub configuration file and the kernel and initramfs image that will contain our boot scripts. We can do this by configuring grub to only load files that are signed with a trusted key. The documentation for this can be found [here](https://www.gnu.org/software/grub/manual/grub/grub.html#Using-digital-signatures), but essentually we need create a GPG key and embed the public portion into our grub binary, and then sign any files that grub will be loading with the private portion. We also need to secure advanced grub functions with a passphrase to prevent the signature checking function from just being turned off.
+
+### Generate a GPG key
+
+To create a GPG key we can use the package `gnupg`, which is already installed since it is a dependency of pacman. The following command will generate a new GPG keyring in our existing keys directory (`/root/keys`) containing the new key. `gnupg` will automatically prompt you to create a passphrase to secure the keyring. You will be asked for this whenever you need to use the key to sign files. This will happen when you update your system with pacman and the scripts we will setup in the following sections are triggered, so requiring you to enter your passphrase at this point is just one more prompt in the already manual system update process.  
+*If you want it to be entirely hands-off you can add `--batch --passphrase-fd /path/to/passphrase/file` to the command below to read the passphrase from a file. You will also have to change the pacman scripts (see next section) to pass in this passphrase file when the key is used.*
+
+```Shell
+gpg --homedir /root/keys/.gnupg --gen-key
+```
+
+- `--homedir /root/keys/.gnupg` specifies the directory that gpg should look for a keyring in.
+  - If no keyring is found here `gen-key` will make one.
+  - By default `gnupg` will make a keyring at `~/.gnupg` which in this case means `/root/.gnupg` since we are logged in as root.
+- `--gen-key` specifies that gpg should generate a new key.
+  - This will prompt you to create a new user profile to store the key under (name and email). These do not have to be real unless you plan to share the public portion of this key with others (probably better to make a different key for that).
+
+There are about 100 other ways to generate a key, this just appeared to be the simplest. Please refer to the [documnentation](https://gnupg.org/documentation/manuals/gnupg/Invoking-GPG.html#Invoking-GPG) for other methods.
+
+### Export the public portion of the key
+
+Now that we have a GPG key, we need to tell grub to only load files that have been signed by it. To do this, we embed the public part of the key into the grub binary. Before this can happen, we have to export the public portion to a file.
+
+```Shell
+gpg --homedir /root/keys/.gnupg --output /root/keys/secure-grub.pgp --armor --export <yourChosenUser@exampleDomain.com>
+```
+
+- `--output /root/keys/secure-grub.pgp` specifies that the public portion of the key should be written to a file called `secure-grub.pgp` in our `/root/keys` directory.
+- `--armor` adds ASCII armor to the exported key file.
+- `--export <yourChosenUser@exampleDomain.com>` specifies which key should be exported based on the email address entered when the key was generated.
+
+This is just a public key, but still might as well restrict access to it.
+
+```Shell
+chmod 400 /root/keys/secure-grub.pgp
+```
+
+### Configure grub to use the key
+
+To embed the key in the grub binary, we can add the `--pubkey` flag to grub-install. We will be automating this in the next section, but here is how you would do it manually, using the same settings we used earlier when installing Linux.
+
+```Shell
+grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB --modules=tpm --pubkey /root/keys/secure-grub.pgp
+```
+
+**Warning!**  
+Embedding the key will automatically turn on grub's `check_signatures` rule, and you will not be able to boot unless all files grub loads are signed (or you drop into the grub shell and disable the rule, which we will address below). You may want to wait to run this command until you have signed all the necessary files (or just setup the automated scripts in the next section).
+
+### Configure grub with a passphrase
+
+Even with an embedded public key and `check_signatures` turned on, anyone with physical access can just enter the grub shell and turn it off. To prevent this, we need to lock those features behind a passphrase. Grub provides a way to do this with pbkdf2 hash derivation such that it can be included in `grub.cfg` without exposing the password to anyone reading the file. Password generation is done with a utility included with grub called `grub-mkpasswd-pbkdf2`, which will prompt you to enter your chosen passphrase twice and then print out the resulting salt and hash.
+
+```Shell
+grub-mkpasswd-pbkdf2 --iteration-count 230000 > password-hash.txt
+```
+
+- `--iteration-count 230000` specifies that 230000 pdkdf2 iterations should be used which will result in a ~2 second unlock time on the test computer.
+  - This number was obtained by running `cryptsetup benchmark` and looking at the number of iterations per second for PBKDF2-sha512, which is what this utility uses by default. This number should adjusted to suit your target system. 2 seconds was chosen to match the LUKS default, which was chosen to balance security and convenience.
+- `> password-hash.txt` specifies that the output of `grub-mkpasswd-pbkdf2` should be written to a file.
+  - From here you can edit the file to just contain the hash, and then use `cat` to append it to an appropriately prepared `40_custom` as per below. Much easier than transcribing it twice (assuming you are using a tty prompt. If you installed a desktop environment then you can just copy and paste).
+
+For more information on `grub-mkpasswd-pbkdf2`, including additional configuration options, see [this page](https://www.gnu.org/software/grub/manual/grub/grub.html#Invoking-grub_002dmkpasswd_002dpbkdf2).
+
+With the passphrase hash generated, grub needs to be configured to accept it. The simplest way to accomplish this is to add the following lines to `/etc/grub.d/40_custom`
+
+```Text
+set superusers="root"
+password_pbkdf2 root grub.pbkdf2.sha512.230000.some-sha512-hash.some-other-sha512-hash
+```
+
+The second line here should include the real output of your call to `grub-mkpasswd-pbkdf2`. This will setup a single "superuser" called "root" with the password you just entered. For more details, see [this page](https://www.gnu.org/software/grub/manual/grub/grub.html#Authentication-and-authorisation).
+> *Note the Arch Linux grub package is specifically configured to NOT overwrite 40_custom when updating grub, unlike the 10_linux file in the same directory, which is overwritten (as you will see below).*
+
+### Signing files for grub
+
+All files loaded by grub now must be signed with the key we generated. Signatures are expected in separate signature files with the same name as the signed file. For a relatively simple grub setup like we have here, the files we need to sign are:
+
+- `/boot/grub/*`
+- `/boot/vmlinuz-linux`
+- `/boot/initramfs-*`
+
+This includes our grub config file (`grub.cfg`), all grub modules not already included in the grub binary, the kernel image itself (`vmlinuz-linux`), and any initramfs images we have (there should be two, a regular one and a fallback).
+
+To sign all these files, we can use a shell for loop:
+
+```Shell
+for i in `find /boot -type f -path "/boot/grub/*" -or -name "vmlinuz*" -or -name "initramfs*" -not -name "*.sig"`;
+do
+  gpg --homedir /root/keys/.gnupg --detach-sign --yes $i
+done
+```
+
+`find`:
+
+- `/boot` specifies the starting directory for the search.
+- `-type f` specifies that only files should be returned (not directories, links, etc).
+- `-path "/boot/grub/*"` specifies files in `/boot/grub` should returned.
+- `-or -name "vmlinuz*"` specifies files starting with `vmlinuz` should be returned.
+- `-or -name "initramfs*"` specifies files starting with `initramfs` should be returned.
+- `-not -name "*.sig"` specifies files ending in `.sig` should NOT be returned.
+
+`gpg`:
+
+- `--detach-sign` specifies that gpg should put the signature in a separate file.
+- `--yes` spcifies that gpg should assume "yes" for most questions.
+  - This saves you from having to answer 100 "signature already exists, do you want to replace it?" questions when running this more than once.
+- `$i` specifies gpg should sign the file indicated by the for loop variable `i`, which is the "current" file as it loops over all the results from `find`.
+
+You will be prompted for your gpg keyring passphrase once, after which it will be saved by `gpg-agent` for about 10 minutes by default. This command might take a couple of minutes to complete depending on how fast your CPU is, as there are quite a few files in the grub directory.
 
 # Automating Everything
 
@@ -792,11 +1289,11 @@ You can perform custom actions at early boot by adding scrits to something calle
 The two sentence version as quoted from the `mkinitcpio` man page is:  
 > The initial ramdisk is in essence a very small environment (early userspace) which loads various kernel modules and sets up necessary things before handing over control to `init`. This makes it possible to have, for example, encrypted root file systems and root file systems on a software RAID array.
 
-`init` is process 0 on most modern linux systems. It is the first process run by the kernel and all other processes are spawned from it and it remains running until shutdown. In the case of Arch Linux, init is usually `systemd`. For more info, check out the [Arch Boot Process](https://wiki.archlinux.org/index.php/Arch_boot_process).
+`init` is process 1 on most modern linux systems. It is the first process run by the kernel and all other processes are spawned from it and it remains running until shutdown. In the case of Arch Linux, init is usually `systemd`. For more info, check out the [Arch Boot Process](https://wiki.archlinux.org/index.php/Arch_boot_process).
 
 ### Arch Linux and mkinitcpio
 
-As of this writing, Arch Linux uses a set of shell scripts in a package called `mkinitcpio` to generate initramfs images. There is talk among the Arch maintainers of switching to a package called `dracut` that is more widely used in other distributions (`mkinitcpio` is custom made for Arch Linux), but so far this has not happened. `mkinitcpio` provides a mechanism to add custom scripts, or "hooks" to the initramfs to customize the boot process. It is these hooks that we will use to automatically unseal our LUKS passphrase from the TPM at boot. Further documentation on `mkinitcpio` can be found in it's [Arch Wiki Page](https://wiki.archlinux.org/index.php/Mkinitcpio), although that page is sadly not representative of the generally excellent quality of articles on the Arch Wiki. While there is plenty of very useful information in there, it falls just short of actually explaining how to create custom hooks or presets. The [man page](https://jlk.fjfi.cvut.cz/arch/manpages/man/mkinitcpio.8) gives a bit more detail on some parts, but also stops short of showing an example of it all coming together.
+As of this writing, Arch Linux uses a set of shell scripts in a package called `mkinitcpio` to generate initramfs images. There is talk among the Arch maintainers of switching to a package called `dracut` that is more widely used in other distributions (`mkinitcpio` is custom made for Arch Linux), but so far this has not happened. `mkinitcpio` provides a mechanism to add custom scripts, or "hooks" to the initramfs to customize the boot process. It is these hooks that we will use to automatically unseal our LUKS passphrase from the TPM at boot. Further documentation on `mkinitcpio` can be found in it's [Arch Wiki Page](https://wiki.archlinux.org/index.php/Mkinitcpio), although that page is sadly not quite representative of the generally excellent quality of articles on the Arch Wiki. While there is plenty of very useful information in there, it falls just short of actually explaining how to create custom hooks or presets. The [man page](https://jlk.fjfi.cvut.cz/arch/manpages/man/mkinitcpio.8) gives a bit more detail on some parts, but also stops short of showing an example of it all coming together.
 
 The default `mkinitcpio` config file is located at `/etc/mkinitcpio.conf`. There are also "preset" files located in `/etc/mkinitcpio.d/` that are generated for each kernel package you have installed based on the template found at `/usr/share/mkinitcpio/hook.preset`. With all that said, the defaults will be fine for the purposes of this guide. The `linux` preset (generated from the above template for the `linux` package) uses the default config file to generate a main initramfs image, and a fallback image in case there is a problem with the first one. These images are nearly identical except for the file name and a few options, and updating the default config will change both of them. The format of the presets actually allow the use of different config files for different initramfs images if desired (you can even generate more than two images), but that is not necessary here.
 
@@ -812,15 +1309,15 @@ The runtime hook can define up to four different shell functions that are run at
 
 ### Adding the hooks to the initramfs
 
-To "install" these custom hooks on your system, simply copy them to `/etc/initcpio/install/` or `/etc/initcpio/hooks/` as appropriate and ensure they have the executable flag (`chmod +x`).
+To "install" these custom hooks on your system, simply copy them to `/etc/initcpio/install/` or `/etc/initcpio/hooks/` as appropriate and ensure they have the executable flag (`chmod +x`). You still have to add these hooks to `mkinitcpio.conf` in order to add them to the initramfs image, which we will do below after explainging how they work a little more.
 
 #### tpm2_encrypt
 
 For `tpm2_encrypt` there are comments throughout the runtime hook file (or otherwise very descriptive names), as well as an extensive helptext in its install file, so how it works will not be explained in great detail here.  
 To summarize, it looks for the files that we copied to our efi partition earlier and uses them to build a real authorization session and unseal the LUKS passphrase that we previously sealed in the TPM. It has a lot of checks for input errors (kernel arguments), and will offer to create a new authorized policy (after you have entered your passphrase manually) if something fails. It will even show you which PCR values changed if it fails to unseal the passphrase so you can make an informed decsion about whether you expected those changes before entering your passphrase manually. If you have a temporary authorized policy like we created earlier, it will create a new "more secure" authorized policy without asking (assuming it is able to unseal the passphrase with that temporary policy).  
-Please look at the source to learn more. In particular, do not neglect to read the help text, as it contains critical information regarding kernel command line arguments needed for it to work.
+Please look at the source to learn more. In particular, do not neglect to read the help text in the install hook, as it contains critical information regarding kernel command line arguments needed for it to work.
 
-To add `tpm2_encrypt` to your initramfs image, simply edit `mkinitcpio.conf` to include it in `HOOKS`. Please note that as mentioned in the help text for this hook, it is written as an extension for the `encrypt` hook that is installed as part of the `cryptsetup` package. The `encrypt` hook has it's own setup requirements (kernel command line arguments) found [here](https://wiki.archlinux.org/index.php/Dm-crypt/System_configuration#Boot_loader), and should be placed *after* `tpm2_encrypt` in `HOOKS`.  
+To add `tpm2_encrypt` to your initramfs image, simply edit `mkinitcpio.conf` to include it in `HOOKS`. Please note that as mentioned in the help text for `tpm2_encrypt`, it is written as an extension for the `encrypt` hook that was added earlier (if you followed the installation section), and should be placed *before* `encrypt` in `HOOKS`.  
 Here is an example: `HOOKS="base udev autodetect keyboard modconf block filesystems tpm2_encrypt encrypt fsck"`  
 Hooks are run in the order listed in the config file for each of the four parts of the boot process (Eg. All early hooks are run in this order, then all main hooks, etc).
 
@@ -855,7 +1352,7 @@ If you read the help text for `tpm2_encrypt` and/or the requirements for the `en
 There are many more optional arguments for `tpm2_encrypt` that are meant to provide flexibilty without having to change the code in the hook, but we are sticking to the defaults here.
 This is also in addition to any other kernel arguments you may want to add that are actually related to the kernel, such as the log level or the quiet flag.
 
-*You will notice that we did not add any arguments to activate `bitlocker_windows_boot`, and we are also not re-generating the grub config with `grub-mkconfig` just yet. Both of these things are comming shortly, don't worry!*
+*You will notice that we did not add any arguments to activate `bitlocker_windows_boot`, and we are also not re-generating the grub config with `grub-mkconfig` just yet. Both of these things are comming in the next section!*
 
 ## Automating Update and Install tasks with Pacman Hooks
 
@@ -869,9 +1366,13 @@ Further reading about hooks is mostly left to you (everything you need to know i
 
 ### Install the hooks
 
-In this repo you will find a folder called `/alpm-hooks/`, which contains a number of hooks and supporting scripts written for this guide. At this point there are four hooks that we are going to look at. Three are related to `grub` and the fourth is `tpm2-encrypt-create-temporary-policy.hook`. The other hooks you will find are related to secure boot and will be addressed once we have set that up in the next part of this guide.
+In this repo you will find a folder called `/alpm-hooks/`, which contains a number of hooks and supporting scripts written for this guide.
 
-To "install" these hooks simply copy them to `/etc/pacman.d/hooks` or `/etc/pacman.d/scripts` as appropriate (you may have to create these folders), and ensure they all have the executable flag (chmod +x). They will automatically be called whenever you update or install packages with pacman and the events that trigger them occur.
+Three hooks are related to `grub`, another is `tpm2-encrypt-create-temporary-policy.hook`, and three more are related to
+
+. The other hooks you will find are related to secure boot and will be addressed once we have set that up in the next part of this guide.
+
+To "install" these hooks simply copy them to `/etc/pacman.d/hooks` or `/etc/pacman.d/scripts` as appropriate (you may have to create these folders), and ensure they all have the executable flag (`chmod +x`). They will automatically be called whenever you update or install packages with pacman and the events that trigger them occur.
 
 #### GRUB updates
 
@@ -889,247 +1390,19 @@ These three hooks could absolutely be combined into a single hook. They haven't 
 #### tpm2-encrypt-create-temporary-policy
 
 To automatically create a temporary policy when updating the kernel or bootloader, there is a hook called `tpm2-encrypt-create-temporary-policy`. This hook also has an accompanying script in the scripts folder. Similar to the `tpm2_encrypt` hook for `mkinitcpio` we will not be going into great detail on how it works here. The main parts were covered when we manually created a temporary policy in the previous part of this guide, and there are also comments throughout the script portion of the hook.  
-The main thing to point out here is that this hook has two trigger sections, meaning it can be tiggered by more than one event. In this case, it is triggered by an update to either the kernel or to GRUB, both of which already trigger other hooks to update their binaries in the efi partition.  
+The main thing to point out here is that this hook has two trigger sections, meaning it can be tiggered by more than one event. In this case, it is triggered by an update to either the kernel or to GRUB, both of which already trigger other hooks to update their binaries in the efi partition.
 
-### Trigger the hooks
-
-With all the hooks "installed", re-install `grub` with pacman (`pacman -S grub`) to trigger the hooks and update the grub config with all the kernel arguments we added, as well as add the Windows boot entry. This will also trigger the other hook to re-create the temporary policy we made earlier, but it was still good to go through that to better understand how this all works.
-
-# Configuring Secure Boot
-
-This section can be completed either using an Arch Linux live disk, or an already installed Arch Linux system. You are responsible for installing any needed packages (if you've been following from the beginning you already have everything), and for ensuring the security of your private keys (to be generated below).
-
-## What is Secure Boot?
-
-Secure Boot is a UEFI system that prevents the execution of unsigned EFI binaries, such as OS bootloaders. It does this by maintaining a certificate registry that each EFI binary's signature is checked against. If there is no match then it cannot execute, thereby providing some level of certainty that binaries running are "trusted". That said, it is probably better to think of Secure Boot as a file integrity tool rather than one that prevents "untrusted" EFI binaries from running. The reason for this is that nearly every computer in the world comes with Microsoft's Secure Boot keys pre-installed. These keys are controlled by Microsoft and used to sign Windows bootloaders, but they have also been used to sign other EFI binaries such as one called `shim` which can effectively allow any other EFI binary to run without having to be signed by Microsoft (though this does require physical precence to install an alternate certificate that `shim` will use to verify signatures), making it only partly effective.
-
-Before getting any deaper into a discussion for or against secure boot, read at least the first two sections of [Rod's Guide to Controlling Secure Boot](http://www.rodsbooks.com/efi-bootloaders/controlling-sb.html) before proceeding to get a better background on how secure boot works.  
-Another excellent resource is [This Guide from the Gentoo Wiki](https://wiki.gentoo.org/wiki/Sakaki%27s_EFI_Install_Guide/Configuring_Secure_Boot).
-Both are guides similar to this guide in that they will show you how to take control of secure boot. Feel free to use them instead of this one if they work for you. In particular, this guide only describes one pathway and set of tools to configure secure boot (though it is the pathway that will hopefully work in the most cases). If it doesn't work for your hardware/firmware, those guides have other methods that may work.  
-If you do follow one of those guides instead, make sure to come back here for the final section where we set up some more pacman hooks to automate the signing of our kernel and other binaries.
-
-## Reasons to use Secure Boot
-
-If "Secure" Boot isn't really all that secure, then why use it? On it's own, using Secure Boot with Microsoft's keys installed isn't all that secure for the reasons outlined above. If you aren't dual booting Windows you can delete the Microsoft keys and secure boot becomes extremely effective, as you have complete control over what gets signed. Technically you could do that and then sign your Windows bootloader with your own key, but that would get tedious fast and is very likely to break some part of Windows Update which we can't just add hooks to like Pacman.
-
-Chances are though, that you are wanting to dual boot with Windows. In that case, you might be wondering if it's worth bothering with after reading more about it at the links above. With everything accomplished so far you can definitely walk away with a working system that automatically unlocks your encrypted disk on boot, and is generally quite secure. That being said, there is at least one major hole in the system that can be mostly filled by using secure boot, and that is the use of the temporary policy on kernel updates and similar. Technically if you did an update and then shutdown your computer without turning it back on immediately that temporary policy is still sitting there valid and ready to unseal your LUKS passphrase. If someone got ahold of your computer in this state they could modify or replace your kernel, bootloader, and/or initramfs with a malicious copies and `tpm2_encrypt` would happily create a new authorized policy incorporating PCR measurements of these malicious files. Secure Boot doesn't remobe this problem this problem, but it mitigates it by adding another layer that an attacker has to get through. By requiring the kernel image, grub image, and initramfs to be signed by a "trusted" key, secure boot acts as a data integrity tool that provides a reasonable level of certainty that these critical early boot files have not been tampered with or replaced since you last shut down. Sure you could just remember to reboot immediately after a system update (and you should), but that's not completely the point. While secure boot doesn't really live up to it's name, it hardly makes your system less secure than having it turned off.
-
-At the end of the day, "invisible" security systems like the setup described here in this guide that automatically unlock your encrypted disk will never be as secure as more opaque alternatives. You sacrifice some security to convenience. This comes back to determining what your real threat model actually is, and then determining how secure you actually need your computer to be and what attack vectors you need to protect against. If you just used LUKS on it's own with the `encrypt` hook and typed in a passphrase every boot there is no question that would be more secure (assuming a very strong passphrase), but it would certainly be less convenient to have to type in two different passwords just to get into your computer.
-
-## Generating New Secure Boot Keys
-
-Assuming you are still here, the first step to take control of secure boot on your machine is to generate new secure boot keys of your own. In this guide we will also be retaining the default keys so you can still boot Windows and get firmware updates with secure boot on. If you have decided not to retain those keys it should be easy to skip the relevant sections below.  
-To generate a new Platofrm Key (PK), Key Exchange Key (KEK), and Database Key (db), you can use `openssl`. The examples in this guide will be using `openssl 1.1.1`, which is the latest Long Term Support release at the time of writing.
-
-The following command will produce an RSA 2048 private key, and a matching public key certificate.
-
-```Shell
-openssl req -new -x509 -newkey rsa:2048 -keyout PK.key -out PK.crt -days 3650 -nodes
-```
-
-- `req` is the `openssl` certificate request tool.
-- `-new` tells `req` to create a new certificate request.
-- `-x509` tells `req` to actually create a certificate rather than just a request for one.
-- `-newkey rsa:2048` tells openssl to generate a new private key using RSA 2048.
-- `-keyout PK.key` specifies the output file for the private key.
-- `-out PK.crt`  specifies the output file for the certificate.
-- `-days 3650` specifies how long the certificate should be valid for.
-  - Since we are putting this certificate in our computer firmware, we want it to last a while. Will you still have this computer in 10 years?  
-- `-nodes` this tells openssl to not encrpyt the private key. If you want to encrpyt it with a password, remove this option and you will be prompted.
-  - For the PK and KEK, you should store these keys somewhere separate like a LUKS encrypted flash drive.
-  - For the db key, you will need access to it regularly to sign new kernel images. If you are storing it inside your encrypted disk with file and folder permissions set to root only, just like the policy-authorization-access, then it should be fine. If someone gets root access to your machine you have bigger problems.
-
-When you run this command you will be prompted to enter some details about yourself as the issuer of the certificate. You can put as little or as much as you want here, but at least set the common name and/or organizaton. These can also be set from the above command with, for example, `-subj /CN=your common name/O=your org name/` if you do not want to do it interactively.  
-Unfortunately it is difficult to find a good list of all values that can go in here. They are listed in [RFC 5280 section 4.1.2.4](https://tools.ietf.org/html/rfc5280#section-4.1.2.4), but the short names are not included there. You can find some of them on [this SO post](https://stackoverflow.com/questions/6464129/certificate-subject-x-509).  
-As an example, this is the subject/issuer you'll find in the default PK on a lenovo thinkpad from 2016: `/C=JP/ST=Kanagawa/L=Yokohama/O=Lenovo Ltd./CN=Lenovo Ltd. PK CA 2012`
-
-### Generate the keys
-
-Run the above command three times, generating a PK, KEK, and db key.
-
-```Shell
-openssl req -new -x509 -newkey rsa:2048 -keyout PK.key -out PK.crt -days 3650 -nodes -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd PK/"
-
-openssl req -new -x509 -newkey rsa:2048 -keyout KEK.key -out KEK.crt -days 3650 -nodes -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd KEK/"
-
-openssl req -new -x509 -newkey rsa:2048 -keyout db.key -out db.crt -days 3650 -nodes -subj "/C=CA/ST=Alberta/L=Calgary/CN=My Name, yyyy-mm-dd db/"
-```
-
-Make sure you store the private keys (`.key`) in a safe place (might as well keep the certificates too). At minimum, you will need the db key regularly to re-sign your kernel image, so copy that one to `/root/keys` like we did with certain files in the TPM section, and `chmod 400` it so that only root can read it, and can't overwrite it:
-
-```Shell
-cp db.key /root/keys/db.key
-cp db.crt /root/keys/db.crt
-
-chmod 400 /root/keys/db.key
-chmod 400 /root/keys/db.crt
-```
-
-## Converting the certificates to EFI signature list format
-
-The certificates generated are not in the format needed by the tools we will use to install them in the frimware. To fix this we will use some utilities from the `efitools` package. The version we are using here is `1.9.2`.  
-We want to convert our certificates to EFI Signature List (`.esl`) format. To do this, the following command is used:
-
-```Shell
-cert-to-efi-sig-list -g <your guid> PK.crt PK.esl
-```
-
-- `-g <your guid>` is used to provide a GUID to identify the owner of the certificate (you). If this is not provided, an all zero GUID will be used.
-- `PK.crt` is the input certificate.
-- `PK.esl` is the output esl file.
-
-### Generate a GUID
-
-In order to provide our own GUID for the certificate owner, we have to generate one. There is a multitude of ways to do this, but in this case a one line python script will do the trick:
-
-```Shell
-GUID=`python -c 'import uuid; print(str(uuid.uuid1()))'`
-echo $GUID > GUID.txt
-```
-
-The first line generates the GUID and assigns it to a shell variable called GUID, the second line echos the value into a text file so we can keep it beyond the current shell session.
-
-### Convert the certificates
-
-Run the above command to convert each of the three certificates, also adding the GUID we just generated:
-
-```Shell
-cert-to-efi-sig-list -g $GUID PK.crt PK.esl
-
-cert-to-efi-sig-list -g $GUID KEK.crt KEK.esl
-
-cert-to-efi-sig-list -g $GUID db.crt db.esl
-```
-
-## Preserving the default KEK and db, and dbx entries
-
-Since we want to be able to dual boot Windows 10, it is important that we preserve the default KEK, db, and dbx entries from Microsoft and the computer manufacturer. Maintaining Microsoft's keys will ensure that Windows can still boot, and maintaining the manufacturer keys will ensure we can still install things like EFI/BIOS updates, which are often distributed as EFI binaries signed by the manufactuer's key, that run on reboot to update the firmware. It is especially important that we preserve the dbx entries if we are keeping the Microsoft keys, as the dbx contains a black list of signed efi binaries (mostly all signed by Microsoft) that are not allowed to run, despite being signed by an certificate in the db (one of the Microsoft keys). "But I only need the db and dbx keys for this" you might be thinking. True, but if we do not keep the KEKs too, you cannot benefit from updates to the db and dbx issued by Microsoft or your computer manufacturer. Removing the manufacturer's PK does prevent them from issuing new KEKs, but this is much less likely, and if you want to take control of secure boot there is no way around replacing the PK, unless you have access to the private key it was made with.  
-Finally, while most firmware has an option to restore factory default keys, if yours does not, you may want to keep these keys for that usecase too.
-
-To preserve the existing keys, we will use another utility from `efitools` called `efi-readvar`. This utility runs in Linux user-space and can read efi secure variables such as the secure boot variables:
-
-```Shell
-efi-readvar -v PK -o original_PK.esl
-```
-
-- `-v PK` specifies the efi variable to read
-- `-o original_PK.esl` file to output the contents to (notice this is also in `.esl` format.)
-
-### Copy Original Keys
-
-Run the above command for each of PK, KEK, db, and dbx
-
-```Shell
-efi-readvar -v PK -o original_PK.esl
-
-efi-readvar -v KEK -o original_KEK.esl
-
-efi-readvar -v db -o original_db.esl
-
-efi-readvar -v dbx -o original_dbx.esl
-```
-
-### Append original keys to new keys
-
-With the `.esl` file format, we can easily merge our new keys with the existing ones by simply concatenating the files:
-
-```Shell
-cat KEK.esl original_KEK.esl > all_KEK.esl
-
-cat db.esl original_db.esl > all_db.esl
-```
-
-## Signing the EFI signature list files
-
-While we don't technically need to do this step, since the firmware will accept any keys in secure boot setup mode (we'll get to that later), it is more correct to use signed update files.  
-If you want to add a KEK or db entry after secure boot is no longer in setup mode, you'll have to sign it with the next highest key so let's do that now as practice. The PK can sign itself, and is considered the root of trust, just like the root certificate from a certificate authority such as entrust or lets encrypt. The following command is used to sign the signature lists:
-
-```Shell
-sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl PK.auth
-```
-
-- `-k PK.key` specifies the private key for the certificate.
-- `-c PK.crt` specifies the certificate to sign with.
-- `PK` is the EFI variable the output is intended for.
-- `PK.esl` is the EFI signature list file to sign.
-- `PK.auth` is the name of signed EFI signature list file, with a `.auth` extension indicating that it has an authentication header added.
-
-### Sign the files
-
-Run the above command for each `.esl` file:
-
-```Shell
-sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl PK.auth
-
-sign-efi-sig-list -k PK.key -c PK.crt all_KEK KEK.esl all_KEK.auth
-
-sign-efi-sig-list -k KEK.key -c KEK.crt db all_db.esl all_db.auth
-
-sign-efi-sig-list -k KEK.key -c KEK.crt dbx dbx.esl dbx.auth
-```
-
-The PK signs itself, the PK also signs the KEKs, and our KEK (the only one we have the private key for) signs the db and dbx keys. Note that since we don't have anything to add to the dbx, we just sign the original list.  
-Our db key is later used to sign EFI binaries and kernels that we want to boot, the KEK is used if we want to add new db entries, and the PK is used if we want to add new KEK entries.
-
-## Installing the new Secure Boot Keys
-
-The first step here is to put secure boot into setup mode by removing the current PK. This can be done from the BIOS setup utility, but beyond that, the exact steps differ greatly accross hardware. Typically there will be a security section, and in that, a secure boot section. This is where you would have turned secure boot off in order to install Arch Linux initially or to boot the live disk. Look for an option to put secure boot into setup mode, or an option to delete all secure boot keys. *If you see both, delete all keys*, as this often prevents certain issues with the tool we will be using (we saved all the old keys and will be replacing them anyway). Some firmware may require a firmware password to be set before these options are shown. Setup mode is on when there is no PK. Once a new PK is set, secure boot turns back to user mode, and any updates to any of the secure variables must by signed by the next highest key.  
-Quick note: you may see a reference to `noPK.esl` or similar in the reference guides. This is an empty file signed with the PK that can be used to "update" the PK to nothing (remove the PK) while in user mode, thereby putting secure boot back into setup mode without entering the BIOS setup utility. This works because the PK can be updated in user mode as long as the update is signed by the current PK. Unless you are changing your keys often, you likely won't need this, but now you understand what it is for.
-
-Once secure boot is in setup mode, we can use an `efitools` utility called `efi-updatevar` to replace each of the secure variables:
-
-```Shell
-efi-updatevar -f PK.auth PK
-```
-
-- `-f PK.auth` specifies the file to update the variable with. `PK.auth` is the efi signature list (signed in this example) that will be set on the variable.
-  - If you wan to use a .esl file here, you need to also add a `-e` before or after this.
-- `PK` is the secure variable we want to update
-
-*NOTE:* This command as written will **replace** all the values in the variable. It is possible to instead append with `-a` but this seems to have problems on some firmware, while just replacing everything usually works, and in this case we added the old keys to ours and (ideally) cleared out all the secure variables before starting anyway. The reason it is ideal to clear out all the variables before starting is also because some firmware will not accept a replacement if there is a value present. Clearing all the keys and using the replacement command above appears to work in the most cases.
-
-### Install new secure boot keys
-
-Run the above command for dbx, db, KEK, and PK, preferably in that order, but just make sure the PK is last so that we keep setup mode active.
-
-```Shell
-efi-updatevar -f dbx.auth dbx
-
-efi-updatevar -f all_db.auth db
-
-efi-updatevar -f all_KEK.auth KEK
-
-efi-updatevar -f PK.auth PK
-```
-
-Since we signed our efi signature lists and created auth files we should theoretically be able to update the KEK, db, and dbx even after setting the PK (which takes us out of setup mode), but `efi-updatevar` seems to have trouble doing this at least on the machine used as a testbed for this guide. There are other tools that work better for updating with signed esl files (`.auth`) when secure boot is in user mode. For example `KeyTool`, also from `efitools` seems to work fairly well, however it is an efi binary so you have to reboot to use it (like your BIOS setup), which is more cumbersome.
-
-## Test your new secure boot keys
-
-If you successfully completed all of the above sections, you now have your own keys added to secure boot, so you can start signing bootloaders and kernels with your db key!  
-If you want to quickly test your handywork `efitools` supplies a `HelloWorld` efi binary that you can sign and try to boot into. Assuming your efi system patition is mounted at `/efi` as we setup earlier, we can use a tool called `sbsign` from the `sbsigntools` package to sign the efi binary.
-
-```Shell
-mv /boot/EFI/Boot/bootx64.efi /boot/EFI/Boot/bootx64-prev.efi # Rename the existing default boot entry so that we can restore it later.
-
-sbsign --key db.key --cert db.crt --output /boot/EFI/Boot/bootx64.efi /usr/share/efitools/efi/HelloWorld.efi
-```
-
-- `--key db.key` specifies the private key to sign the file with.
-- `--cert db.cry` specifies the public certificate for the given private key that was added to secure boot.
-- `--output /boot/EFI/Boot/bootx64.efi` specifies where to save the signed version of the file.
-- `/usr/share/efitools/efi/HelloWorld.efi` specifies the file to sign.
-
-After running this, reboot, and enter BIOS setup. Enable secure boot and move your boot drive to the top of your boot order (above grub). When you exit setup it should try to boot the HelloWorld binary sinice it is in the efi default location for that drive, and becasue we signed it, it should work. If it doesn't, then something went wrong up above.  
-To get back to linux, just put grub back at the top of your boot order. **Don't forget to replace the hello world binary with the file that used to be there!**
-
-## Automating the signing of your bootloader, kernel, and initramfs
+#### secure boot signing
 
 Now that we have setup our own secure boot keys, we need to use them to sign our bootloader, kernel and initramfs. Since these will be updated somewhat regularly, what better way to make sure they are always signed than to automate it! Since we already covered Pacman hooks above, lets just dive into the hooks themselves.
 
 There are three hooks called `secure-boot-sign-grub`, `secure-boot-sign-initramfs`, and `secure-boot-sign-kernel`, each to sign their respective images. They all have an accompanying script of the same name in the `scripts` folder. The implementation of these hooks is quite straightforward, and all three scripts are basically the same, with plenty of comments, so just go read them yourself.
 
 To "install" the hooks, just copy the files to `/etc/pacman.d/hooks` or `/etc/pacman.d/scripts` as appropriate for each file.
+
+### Trigger the hooks
+
+With all the hooks "installed", re-install `grub` with pacman (`pacman -S grub`) to trigger the hooks and update the grub config with all the kernel arguments we added, as well as add the Windows boot entry. This will also trigger the other hook to re-create the temporary policy we made earlier, but it was still good to go through that to better understand how this all works.
 
 # Conclusion
 
@@ -1191,9 +1464,16 @@ This section reproduces most of the links that were included in-line throughout 
 ## Secure Boot
 
 1. <http://www.rodsbooks.com/efi-bootloaders/controlling-sb.html>
-2. <https://wiki.gentoo.org/wiki/Sakaki%27s_EFI_Install_Guide/Configuring_Secure_Boot>
-3. <https://www.openssl.org/docs/man1.1.1/man1/openssl-req.html>
-4. <https://tools.ietf.org/html/rfc5280#section-4.1.2.4>
-5. <https://stackoverflow.com/questions/6464129/certificate-subject-x-509>
-6. <https://manpages.debian.org/unstable/efitools/index.html>
-7. <https://wiki.archlinux.org/index.php/Secure_Boot>
+2. <https://web.archive.org/web/20201005194738/https://wiki.gentoo.org/wiki/Sakaki's_EFI_Install_Guide/Configuring_Secure_Boot>
+3. <https://www.funtoo.org/Secure_Boot>
+4. <https://www.openssl.org/docs/man1.1.1/man1/openssl-req.html>
+5. <https://tools.ietf.org/html/rfc5280#section-4.1.2.4>
+6. <https://stackoverflow.com/questions/6464129/certificate-subject-x-509>
+7. <https://manpages.debian.org/unstable/efitools/index.html>
+8. <https://wiki.archlinux.org/index.php/Secure_Boot>
+9. <https://askubuntu.com/questions/951040/how-shim-verifies-binaries-in-secure-boot>
+
+## Secure Grub
+
+1. <https://gnupg.org/documentation/manuals/gnupg/Invoking-GPG.html#Invoking-GPG>
+2. <https://www.gnu.org/software/grub/manual/grub/grub.html#Using-digital-signatures>

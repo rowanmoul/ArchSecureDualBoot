@@ -1,7 +1,9 @@
 <!-- omit in toc -->
 # Secure Booting Arch Linux Alongside Windows 10 with Encrpyted Disks
 
-This guide started as my personal documentation of this process for my own reference, and grew to become the monstrosity you see below. I am **not** a security expert. I am a software developer with experience primarily in web development and this guide is the culmination of my own reasearch into this topic and is by no means meant to impart any sort of sound security advice. It is up to you to determine if the setup described here is suitably secure for your needs. If something included in this guide is totally wrong, bad practice, or fundamentally insecure please open an issue, submit a pull request, or otherwise contact me. I welcome the feedback!
+This guide started as my personal documentation of this process for my own reference, and grew to become the monstrosity you see below. I am **not** a security expert. I am a software developer with experience primarily in web development and this guide is the culmination of my own reasearch into this topic and is by no means meant to impart any sort of sound security advice. It is up to you to determine if the setup described here is suitably secure for your needs. The [safeboot project has an excellent](https://safeboot.dev/threats/) page that describes all the types of attacks that they protect against and how they prevent them. You may well find their work to be more suitable to your needs. It is indisputably more secure, but at the cost of some convenience.
+
+If something included in this guide is totally wrong, bad practice, or fundamentally insecure please open an issue, submit a pull request, or otherwise contact me. I welcome the feedback!
 
 <!-- omit in toc -->
 # Table of Contents
@@ -1472,8 +1474,11 @@ This section reproduces most of the links that were included in-line throughout 
 7. <https://manpages.debian.org/unstable/efitools/index.html>
 8. <https://wiki.archlinux.org/index.php/Secure_Boot>
 9. <https://askubuntu.com/questions/951040/how-shim-verifies-binaries-in-secure-boot>
+10. <https://ubs_csse.gitlab.io/secu_os/tutorials/linux_secure_boot.html>
+11. <https://ruderich.org/simon/notes/secure-boot-with-grub-and-signed-linux-and-initrd>
 
 ## Secure Grub
 
+Some of the secure boot links above also cover secure grub but they are not included here to avoid duplication.
 1. <https://gnupg.org/documentation/manuals/gnupg/Invoking-GPG.html#Invoking-GPG>
 2. <https://www.gnu.org/software/grub/manual/grub/grub.html#Using-digital-signatures>

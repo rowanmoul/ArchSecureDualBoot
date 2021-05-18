@@ -16,5 +16,5 @@ Target = usr/lib/initcpio/*
 Description = Creating temporary authorized TPM policy...
 When = PostTransaction
 Exec = /etc/pacman.d/scripts/tpm2-encrypt-create-temporary-policy
-Depends = grub
-Depends = efibootmgr
+Depends = tpm2-tools
+Depends = tpm2-tss

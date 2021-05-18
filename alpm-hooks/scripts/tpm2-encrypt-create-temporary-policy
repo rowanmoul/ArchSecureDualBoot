@@ -1,19 +1,129 @@
 #!/bin/bash -e
 
-# This script is explained in detail in the accompanying guide/readme section "Create a temporary policy"
+# Used to resolve a block device from persistent block device name, or /dev/* path
+resolve_device() {
+    local dev device=$1
+    case $device in
+        UUID=*|PARTUUID=*|LABEL=*|PARTLABEL=*)
+            # Resolve the device
+            dev=$(blkid -lt "$device" -o device)
+            # Double check the device actually exists
+            if [[ -z "$dev" ]]; then
+                echo "$dev"
+                return 0
+            fi
+            return 1
+        ;;
+        /dev/*)
+            # Check the device actually exists
+            if [[ -z "$device" ]]; then
+                echo "$device"
+                return 0
+            fi
+            return 1
+        ;;
+    esac
+    return 1
+}
+
+# -- Mount partition with tpm files, identify correct folder, and correct file names -- #
+
+# Parse tpm_files_part from the kernel command line
+tpm_files_part=$(xargs -n1 -a /proc/cmdline | sed -En "s/tpm_files_part=(.*)/\1/p")
+
+# Make directory to use as mount point
+mkdir tpm_files
+
+# Resolve the device and mount it if possible
+[[ -n "$tpm_files_part" ]] && resolved_files_part="$(resolve_device "$tpm_files_part")" && mount "$resolved_files_part" tpm_files;
+
+# Verify that someting was mounted and exit if not.
+if ! mountpoint -q "tpm_files" 2>/dev/null; then
+    echo "Could not mount tpm_files_part device. Temporary policy was NOT created."
+    exit 1 
+fi
+
+# Parse cryptdevice and tpm2_encrypt optional arguments from kernel command line
+cryptdevice=$(xargs -n1 -a /proc/cmdline | sed -En "s/cryptdevice=([^:]*):.*/\1/p")
+tpm_files_dir=$(xargs -n1 -a /proc/cmdline | sed -En "s/tpm_files_dir=(.*)/\1/p")
+tpm_policy_auth=$(xargs -n1 -a /proc/cmdline | sed -En "s/tpm_policy_auth=(.*:.*)/\1/p")
+tpm_pcr_bank=$(xargs -n1 -a /proc/cmdline | sed -En "s/tpm_pcr_bank=(.*)/\1/p")
+
+# Check for tpm_file_dir and validate input
+if [[ -n "$tpm_files_dir" ]] && [[ -d "tpm_files$tpm_files_dir" ]]; then
+    base_file_path="tpm_files$tpm_files_dir"
+elif [[ -n "$cryptdevice" ]]; then
+    # Try to use folder named as UUID of the luks container
+    if [[ -n "$cryptdevice" ]] && resolved_cryptdevice="$(resolve_device "$cryptdevice")" && [[ -n "$resolved_cryptdevice" ]] &&\
+    crypt_UUID=$(cryptsetup luksUUID "$resolved_cryptdevice") && [[ -d "tpm_files/$crypt_UUID" ]]; then
+        base_file_path="tpm_files/$crypt_UUID"
+    else
+        # Fall back to root of partition
+        base_file_path="tpm_files"
+    fi
+else
+    # Fall back to root of partition
+    base_file_path="tpm_files"
+fi
+
+# Check for tpm_policy_auth and get policy auth key name and handle
+if [[ -n "$tpm_policy_auth" ]]; then
+    IFS=: read -r _ pa_handle <<EOF
+$tpm_policy_auth
+EOF
+    # Validate handle input and get file name if specified
+    if [[ -n "$pa_handle" ]] && [[ -f "$base_file_path/$pa_handle" ]]; then 
+        policy_authorization_key_handle="$base_file_path/$pa_handle"
+    elif [[ -f "$base_file_path/policy-authorization-key.handle" ]]; then
+        policy_authorization_key_handle="$base_file_path/policy-authorization-key.handle"
+    else
+        echo "tpm_policy_auth handle file name not found and default not available. Temporary policy was NOT created."
+        exit 1
+    fi
+# Otherwise check for defaults
+elif [[ -f "$base_file_path/policy-authorization-key.handle" ]]; then
+    policy_authorization_key_handle="$base_file_path/policy-authorization-key.handle"
+else
+    echo "tpm_policy_auth not specified and defaults not available. Temporary policy was NOT created."
+    exit 1
+fi
+
+# Check for tpm_pcr_bank and validate input
+if [[ -n "$tpm_pcr_bank" ]]; then 
+    case "$tpm_pcr_bank" in
+        sha1|sha256|sha384|sha512|sm3_256|sha3_256|sha3_384|sha3_512) # This should be all the possible options according to the spec.
+            pcr_bank_alg="$tpm_pcr_bank"
+        ;;
+        *)
+            echo "Unrecognized pcr bank algorithm [$tpm_pcr_bank]. Using default sha256"
+            pcr_bank_alg="sha256"
+        ;;
+    esac
+else
+    pcr_bank_alg="sha256"
+fi
+
+# -- Create a temporary policy -- #
+
+# This part of the script is explained in detail in the accompanying guide/readme section "Create a temporary policy"
 
 # Start a "trial" auth session.
 tpm2_startauthsession -Q --hash-algorithm sha256 --session temporary-authorized-policy.session
 
 # Add pcr values we know won't change on a kernel or grub update
-tpm2_policypcr -Q --pcr-list sha256:0,1,2,3,7 --session temporary-authorized-policy.session
+tpm2_policypcr -Q --pcr-list "$pcr_bank_alg:0,1,2,3,7" --session temporary-authorized-policy.session
 
 # Add a requirement that the policy only be satisfied if the TPM reset_count is one plus it's current value
-tpm2_policycountertimer -Q --session temporary-authorized-policy.session --policy /boot/tpm2_encrypt/temporary-authorized-policy.policy --eq resets=$(($(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") + 1))
+tpm2_policycountertimer -Q --session temporary-authorized-policy.session --policy $base_file_path/temporary-authorized-policy.policy --eq resets=$(($(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p") + 1))
 
 # cleanup temporary session file
 tpm2_flushcontext temporary-authorized-policy.session
 rm temporary-authorized-policy.session
 
 # sign the policy with the policy authorization key
-tpm2_sign -Q --key-context /root/keys/policy-authorization-key.handle --auth file:/root/keys/policy-authorization-access.bin --hash-algorithm sha256 --scheme rsapss --signature /boot/tpm2_encrypt/temporary-authorized-policy.signature /boot/tpm2_encrypt/temporary-authorized-policy.policy
+tpm2_sign -Q --key-context $policy_authorization_key_handle --auth "hex:0x$(cat tpm_files/policy-authorization-accessaa /root/bootkeys/policy-authorization-accessab)" --hash-algorithm sha256 --scheme rsapss --signature $base_file_path/temporary-authorized-policy.signature $base_file_path/temporary-authorized-policy.policy
+
+# -- Cleanup -- #
+
+umount tpm_files
+rm -r tpm_files

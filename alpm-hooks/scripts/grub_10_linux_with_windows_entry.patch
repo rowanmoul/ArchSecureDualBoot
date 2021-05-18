@@ -1,0 +1,17 @@
+@@ -277,9 +277,16 @@
+     is_top_level=false
+   fi
+ 
++ CLASS_ORIG="$CLASS"
++ CLASS="${CLASS} --unrestricted"
++
+   linux_entry "${OS}" "${version}" advanced \
+               "${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}"
+ 
++  linux_entry "Windows 10" "${version}" simple "boot_windows=1 win_boot_entry=0000"
++
++  CLASS="${CLASS_ORIG}"
++
+   if test -e "${dirname}/initramfs-${version}-fallback.img" ; then
+     initrd="initramfs-${version}-fallback.img"
+ 

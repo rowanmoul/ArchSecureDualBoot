@@ -1,0 +1,12 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/initcpio/*
+
+[Action]
+Description = Signing kernel and initramfs for GRUB...
+When = PostTransaction
+Exec = /usr/bin/find /boot -type f \( -name "vmlinuz*" -or -name "initramfs*" \) -not -name "*.sig" -exec gpg --homedir /root/bootkeys/.gnupg --detach-sign --yes {} \;
+Depends = gnupg

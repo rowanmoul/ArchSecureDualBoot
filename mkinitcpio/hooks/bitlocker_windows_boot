@@ -1,12 +1,15 @@
 #!/usr/bin/ash
 
 run_earlyhook() {
+    # Check for kernel parameter to activate hook
     if [ -n "$boot_windows" ] && [ "$boot_windows" = "1" ]; then
+        # Make sure the efivarfs module is loaded
     	modprobe -a -q efivarfs >/dev/null 2>&1
+        # Check for and validate boot entry variable if available
     	if [ -n "$win_boot_entry" ] && [ 11 -eq $(echo "$win_boot_entry" |  sed -En "s/[[:digit:]]{4}/1/p")1 ]; then
-            efibootmgr -qn $win_boot_entry
-            reboot
-        else
+            efibootmgr -qn "$win_boot_entry"
+            reboot -f
+        else # Use default boot entry
             echo "Booting default entry 0000..."
             efibootmgr -qn 0000
             reboot -f

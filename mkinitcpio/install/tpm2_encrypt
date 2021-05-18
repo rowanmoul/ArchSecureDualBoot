@@ -7,10 +7,6 @@ build() {
     add_module "tpm_crb"
     add_module "tpm_tis"
 
-    # Add filesystem modules for fat and vfat so we can mount the efi partition
-    add_module "fat"
-    add_module "vfat"
-
     # Add the multitude of tpm2-tools needed by this hook. Linked libraries will also be copied automatically.
     add_binary "tpm2_pcrread"
     add_binary "tpm2_verifysignature"
@@ -34,13 +30,15 @@ build() {
 
 help() {
     cat <<HELPEOF
-This hook is an extension for the 'encrypt' hook that allows for an encrypted
-root device that can be unlocked with a TPM 2.0 device.
-It MUST come before the 'encrypt' hook, and will generate a keyfile in the
-default location for the 'encrypt' hook to use.
+This hook is an extension for the 'encrypt' hook (bundled with the cryptsetup
+package) that allows for an encrypted root device that can be unlocked with a
+TPM 2.0 device. It MUST come before the 'encrypt' hook, and will generate a
+keyfile in the default location for the 'encrypt' hook to use.
 
-Users should specify the device to be unlocked according to
-the requirements of the 'encrypt' hook.
+Users should specify the device to be unlocked (cryptdevice)
+and the root filesystem (root) according to the requirements of the 'encrypt'
+hook as found in the arch wiki:
+https://wiki.archlinux.org/title/Dm-crypt/System_configuration#Kernel_parameters
 
 For unlocking via TPM 2.0, this hook makes use of LUKS passphrase sealed in a
 TPM object that is restricted with a policy that requires a second policy signed
@@ -50,40 +48,46 @@ https://github.com/rowanmoul/ArchSecureDualBoot
 
 Required kernel command line arguments:
 
-tpm_efi_part=device
+tpm_files_part=device
     - Must be specified on the kernel command line in order to access
-      the EFI system partition.
+      the drive partition containing the signed policy.
     - 'device' can be a location in /dev or a uuid etc.
-    - Refer to documentation for specifying the 'root=device' argument for
-      formatting details, but uuid is recommended.
-    - Technicaly you could put any unencrypted  fat or vfat partition here.
-      EFI is just the simplest and should always be available.
+    - Refer the arch wiki page "Persistent Block Device Naming" for
+      formatting details, but it is strongly suggested that you use the PARTUUID
+      as reported by blkid, as device names in /dev can change.
+      Eg. tpm_files_part=UUID=some-partition-uuid
+    - If you include the 'filesystems' hook prior to this one, most common
+      filesystems should be accepted for this partition. Alternatively you can
+      specify exactly what you need in MODULES (/etc/mkinitcpio.conf).
 
 Optional kernel command line arguments:
 
-'tpm_file_dir=directory'
+'tpm_files_dir=directory'
     - Specifies the directory in which to look for files needed by this hook
       such as authorized policy files, signatures, and key handle files.
     - 'directory' is the path to a directory on the partition given by
-      'tpm_efi_part' and must begin with a / at the top level of that partition.
+      'tpm_files_part' and MUST begin with a / at the top of that partition.
     - This directory should contain all of the files specified in the below
       optional arguments, as well as the authorized and temporary policies.
       Some of these policies are written by pacman hooks so their file names
-      cannot be speciifed like the key handles below for simplicity.
+      cannot be specifed like the key handles below for simplicity.
       Please refer to the initial setup readme for further details.
-    - If this argument is not specified, the hook will use
-      "/EFI/arch/tpm2-encrypt" on the given partition as the default.
+    - If this argument is not specified, the hook will try
+      "/uuid-of-cryptdevice/" on the partition indicated above.
+      - This uuid is obtained by running 'cryptsetup luksUUID'
+    - If a directory named after the luks device uuid is not present
+      this hook will fall back to the root of the above partition.
 
-tpm_sealed_key=handle
+tpm_sealed_key=handle-file
     - Specifies the sealed TPM object's location in the TPM NVRAM.
-    - 'handle' is the file name of a handle file in the directory given above.
+    - 'handle-file' is the file name of a handle file in the directory above.
     - If this argument is not specified the hook will look for a file called
     'sealed-passphrase.handle' in the directory given above.
 
-'tpm_policy_auth=name:handle'
+'tpm_policy_auth=name-file:handle-file'
     - Specifies the policy auth key's name and location in the TPM NVRAM.
-    - 'name' is the file name of a name file in the directory given above.
-    - 'handle' is the file name of a handle file in the directory given above.
+    - 'name-file' is the file name of a name file in the directory given above.
+    - 'handle-file' is the file name of a handle file in the directory above.
     - If this argument is not specified, the hook will look for files called
       'policy-authorization-key.name' and 'policy-authorization-key.handle'
       in the directory given above.
@@ -103,11 +107,7 @@ changed since the last time a policy was authorized will be shown, and you will
 be asked if you want to create a new authorized policy on the new PCR values
 after unlocking the volume with a password.
 The previous values are signed and verified with the policy authorization key
-to maintain integrity and trust.
-
-NOTE: This hook is secure when used with signed kernel and initramfs images
-and secure boot turned on. If you cannot trust your initramfs and/or kernel
-image this hook is not secure.
+to provide a certain level of integrity and trust.
 HELPEOF
 }
 

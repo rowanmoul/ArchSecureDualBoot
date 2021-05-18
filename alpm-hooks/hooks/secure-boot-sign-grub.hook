@@ -9,3 +9,4 @@ Description = Signing grub image with db key...
 When = PostTransaction
 Exec = /etc/pacman.d/scripts/secure-boot-sign-grub
 Depends = sbsigntools
+Depends = gnupg

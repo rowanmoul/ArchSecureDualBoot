@@ -4,15 +4,15 @@
 cp /efi/EFI/GRUB/grubx64.efi grubx64.efi
 
 # sign the image and overwrite the original with the signed copy.
-echo -n "grubx64.efi - " && sbsign --key /root/keys/db.key --cert /root/keys/db.crt --output /efi/EFI/GRUB/grubx64.efi grubx64.efi
+echo -n "grubx64.efi - " && gpg --homedir /root/bootkeys/.gnupg -d /root/bootkeys/db.key | sbsign --key - --cert /root/bootkeys/db.crt --output /efi/EFI/GRUB/grubx64.efi grubx64.efi
 
 # Make sure the new signed image is larger than the copy of the original.
 # Since the signing process adds the signature to the file itself, the new image should be slightly larger.
 # If the new image is not larger, this if will trigger and copy back the original image so that the computer isn't rendered unbootable.
-# Obviously this can't protect from a corrupted image, but at least it's better than no checks at all.
+# Obviously this can't protect from a corrupted image, but at least it's better than no checks at all?
 if [[ $(du -b /efi/EFI/GRUB/grubx64.efi | cut -f1) -lt $(du -b grubx64.efi | cut -f1) ]]; then
   cp grubx64.efi /efi/EFI/GRUB/grubx64.efi
-  echo "ERROR! Failed to sign grub image for secure boot! Original image retained."
+  echo "ERROR! Failed to sign grub image for secure boot! Original image restored."
 fi
 
 # Remove the copy of the original image in the present working directory.

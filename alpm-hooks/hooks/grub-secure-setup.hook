@@ -1,0 +1,14 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = grub
+
+[Action]
+Description = Setting up secure GRUB...
+When = PostTransaction
+Exec = /etc/pacman.d/scripts/grub-secure-setup
+Depends = grub
+Depends = efibootmgr
+Depends = patch
+Depends = gnupg

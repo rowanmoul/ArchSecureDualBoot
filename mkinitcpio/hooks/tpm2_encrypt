@@ -1,14 +1,11 @@
 #!/usr/bin/ash
 
 run_earlyhook() {
-    # make sure we have modules loaded for filesystems
-    modprobe -a -q fat vfat >/dev/null 2>&1
-
-    # make /efi if it doesn't exist
-    mkdir /efi
+    # make /tpm_files if it doesn't exist
+    mkdir /tpm_files
 
     # Check for tpm_efi_part, resolve it, and mount it.
-    if [ -n "$tpm_efi_part" ] && resolved_efi_part="$(resolve_device "$tpm_efi_part")" && mount "$resolved_efi_part" /efi; then
+    if [ -n "$tpm_files_part" ] && resolved_files_part="$(resolve_device "$tpm_files_part")" && mount "$resolved_files_part" /tpm_files; then
         return 0
     else
         return 1
@@ -20,25 +17,36 @@ run_hook() {
     modprobe -a -q tpm_crb tpm_tis >/dev/null 2>&1
 
     # Set default TCTI to be tpm0 instead of tpmrm0
+    # This means we are accessing the TPM directly and need to be careful to clean up after ourselves.
     export TPM2TOOLS_TCTI="device:/dev/tpm0"
 
     # ==========================
     # Collect Input and Validate
     # ==========================
 
-    # Check if partition is mounted at /efi. Abort if not.
-    if ! mountpoint -q "/efi" 2>/dev/null; then
-        echo "tpm2_encrypt could not mount tpm_efi_part partition. Falling back to passphrase prompt."
+    # Check if partition is mounted at /tpm_files. Abort if not.
+    if ! mountpoint -q "/tpm_files" 2>/dev/null; then
+        echo "tpm2_encrypt could not mount tpm_files_part device. Falling back to passphrase prompt."
         return 1 
     fi
 
     # Check for tpm_file_dir and validate input
-    if [ -n "$tpm_file_dir" ] && [ -d "/efi$tpm_file_dir" ]; then
-        base_file_path="/efi$tpm_file_dir"
-    elif [ -d "/efi/EFI/arch/tpm2_encrypt" ]; then
-        base_file_path="/efi/EFI/arch/tpm2_encrypt"
+    if [ -n "$tpm_files_dir" ] && [ -d "/tpm_files$tpm_files_dir" ]; then
+        base_file_path="/tpm_files$tpm_files_dir"
+    elif [ -n "$cryptdevice" ]; then
+        # Try to use folder named as UUID of the luks container
+        IFS=: read -r luksdevice _ <<EOF
+$cryptdevice
+EOF
+        if resolved_luksdevice="$(resolve_device "$luksdevice")" && crypt_UUID=$(cryptsetup luksUUID "$resolved_luksdevice") &&\
+        [ -d "tpm_files/$crypt_UUID" ] && [ -d "/tpm_files/$crypt_UUID" ]; then
+            base_file_path="/tpm_files/$crypt_UUID"
+        else
+            # Fall back to root of partition
+            base_file_path="/tpm_files"
+        fi
     else
-        echo "tpm_file_dir and/or default file directory not available. Falling back to passphrase prompt."
+        # The encrypt hook will print an error about the lack of a cryptdevice argument.
         return 1
     fi
 
@@ -72,7 +80,7 @@ EOF
         fi
 
         # Verify both name and handle were set
-        if ! \( [ -f "$policy_authorization_key_name" ] && [ -f "$policy_authorization_key_handle" ] \); then
+        if ! { [ -f "$policy_authorization_key_name" ] && [ -f "$policy_authorization_key_handle" ] ;} then
             echo "tpm_policy_auth file names not found and defaults not available. Falling back to passphrase prompt."
             return 1
         fi
@@ -88,7 +96,7 @@ EOF
     # Check for tpm_pcr_bank and validate input
     if [ -n "$tpm_pcr_bank" ]; then 
         case "$tpm_pcr_bank" in
-            sha1|sha256|sha384|sha512|sm3_256|sha3_256|sha3_384|sha3_512)
+            sha1|sha256|sha384|sha512|sm3_256|sha3_256|sha3_384|sha3_512) # This should be all the possible options according to the spec.
                 pcr_bank_alg="$tpm_pcr_bank"
             ;;
             *)
@@ -112,6 +120,7 @@ EOF
     create_authorized_policy_session() {
         ! tpm2_startauthsession -Q --policy-session -S /sealed-auth-session.ctx 2>/dev/null && return $?
 
+        # tpm2_policypcr can only do so many pcr values at once, so we split them into two calls
         ! tpm2_policypcr -Q -S /sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,7" 2>/dev/null && return $?
 
         ! tpm2_policypcr -Q -S /sealed-auth-session.ctx -l "$pcr_bank_alg:4,5,8,9" 2>/dev/null && return $?
@@ -125,7 +134,7 @@ EOF
 
         ! tpm2_policypcr -Q -S /sealed-auth-session.ctx -l "$pcr_bank_alg:0,1,2,3,7" 2>/dev/null && return $?
 
-        export reset_count=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p")
+        reset_count=$(tpm2_readclock | sed -En "s/[[:space:]]*reset_count: ([0-9]+)/\1/p")
 
         ! tpm2_policycountertimer -Q -S /sealed-auth-session.ctx --eq resets=$reset_count && return $?
 
@@ -135,7 +144,7 @@ EOF
 
     unseal_passphrase() {
         tpm2_unseal -Q -p "session:/sealed-auth-session.ctx" -c "$sealed_key_handle" -o /crypto_keyfile.bin 2>/dev/null
-	return $?
+	    return $?
     }
 
     create_reauthorize_policy() {
@@ -150,8 +159,8 @@ EOF
         # Also save new pcr values for comparison in future boots
         tpm2_pcrread -Q "$pcr_bank_alg:0,1,2,3,4,5,7,8,9" 2>/dev/null | sort - > /reauthorize-pcr-values.txt 2>/dev/null
 
-        export policy_authorization_key_handle=$policy_authorization_key_handle
-        export base_file_path=$base_file_path
+        export policy_authorization_key_handle
+        export base_file_path
     }
 
     ask_reauthorize_policy() {
@@ -189,7 +198,7 @@ EOF
                 elif [ "$step" = "1" ]; then
                     echo "Failed to create authorized policy session!"
                 elif [ "$step" = "2" ]; then
-                    echo "Failed to unseal passphrase with authorized policy!"
+                    echo "Failed to unseal passphrase with authorized policy session!"
                 fi
                 tpm2_flushcontext -Q /sealed-auth-session.ctx 2>/dev/null
                 ask_reauthorize_policy
@@ -241,27 +250,30 @@ EOF
         try_unseal_with_temp_authorized_policy
         return $?
     else
-        echo "An unexpected input error occured. Please verify your kernel arguments. Falling back to passphrase prompt."
+        echo "An unexpected input error occured. Please verify your kernel arguments for tpm2_encrypt. Falling back to passphrase prompt."
         return 1
     fi
 }
 
 run_latehook() {
     # This is where we will optionally re-authorize a policy with the current PCR values.
-    # This is done as a late hook as we need the root FS to be mounted already so we can use the auth key to sign the new policy.
+    # This is done as a late hook as we need the root FS to be mounted already so we can use the other half of the auth key access to sign the new policy.
     # No checks are done here. If these files exist, they will be signed.
-    # If the user is not using secure boot to ensure their initramfs image is not tampered with then this could be a security hole, as
+    # If the user is not using secure boot and secure grub to ensure their initramfs image is not tampered with then this could be a security hole, as
     # someone could modify the initramfs to insert their own policy with the same filename and it would be signed.
-    #
+
+    local auth_key_access
+    auth_key_access="hex:0x$(cat $base_file_path/policy-authorization-accessaa /new_root/root/bootkeys/policy-authorization-accessab)"
+
     if [ -f /reauthorize-policy.policy ]; then
         mv /reauthorize-policy.policy "$base_file_path/authorized-policy.policy"
 
-        tpm2_sign -Q -c "$policy_authorization_key_handle" -p file:/new_root/root/keys/policy-authorization-access.bin -g sha256 -s rsapss -o "$base_file_path/authorized-policy.signature" "$base_file_path/authorized-policy.policy" 2>/dev/null
+        tpm2_sign -Q -c "$policy_authorization_key_handle" -p "$auth_key_access" -g sha256 -s rsapss -o "$base_file_path/authorized-policy.signature" "$base_file_path/authorized-policy.policy" 2>/dev/null
     fi
     if [ -f /reauthorize-pcr-values.txt ]; then
         mv /reauthorize-pcr-values.txt "$base_file_path/authorized-pcr-values.txt"
 
-        tpm2_sign -Q -c "$policy_authorization_key_handle" -p file:/new_root/root/keys/policy-authorization-access.bin -g sha256 -s rsapss -o "$base_file_path/authorized-pcr-values.signature" "$base_file_path/authorized-pcr-values.txt" 2>/dev/null
+        tpm2_sign -Q -c "$policy_authorization_key_handle" -p "$auth_key_access" -g sha256 -s rsapss -o "$base_file_path/authorized-pcr-values.signature" "$base_file_path/authorized-pcr-values.txt" 2>/dev/null
     fi
 }
 
@@ -276,7 +288,7 @@ run_cleanuphook() {
     # Either this was used to unseal and re-authorize, or it didn't work. Either way, no need to keep it.
     rm "$base_file_path/temporary-authorized-policy.policy" 2>/dev/null
     rm "$base_file_path/temporary-authorized-policy.signature" 2>/dev/null
-    umount /efi
+    umount /tpm_files
 }
 
 # vim: set ft=sh ts=4 sw=4 et:

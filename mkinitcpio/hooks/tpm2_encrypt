@@ -263,7 +263,7 @@ run_latehook() {
     # someone could modify the initramfs to insert their own policy with the same filename and it would be signed.
 
     local auth_key_access
-    auth_key_access="hex:0x$(cat $base_file_path/policy-authorization-accessaa /new_root/root/bootkeys/policy-authorization-accessab)"
+    auth_key_access="hex:$(cat $base_file_path/policy-authorization-accessaa /new_root/root/bootkeys/policy-authorization-accessab)"
 
     if [ -f /reauthorize-policy.policy ]; then
         mv /reauthorize-policy.policy "$base_file_path/authorized-policy.policy"

@@ -1,13 +1,13 @@
 #!/bin/bash -e
 
-echo -n "Installing grub in /boot..."
+echo "Installing grub in /boot..."
 grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB --modules=tpm --pubkey /root/bootkeys/secure-grub.pgp
 
-echo -n "Patching /etc/grub.d/10_linux..."
-patch /etc/grub.d/10_linux /etc/pacman.d/scripts/grub-10_linux-mod.patch
+echo "Patching /etc/grub.d/10_linux..."
+patch /etc/grub.d/10_linux /etc/pacman.d/scripts/grub_10_linux_mod.patch
 
-echo -n "Generating new grub config..."
+echo "Generating new grub config..."
 grub-mkconfig -o /boot/grub/grub.cfg
 
-echo -n "Signing grub files..."
-find /boot -type f -path "/boot/grub/*" -not -name "*.sig" -exec gpg --homedir /root/bootkeys/.gnupg --detach-sign --yes {} \;
+echo "Signing grub files..."
+find /boot -type f -path "/boot/grub/*" -not -name "*.sig" -exec gpg --homedir /root/bootkeys/.gnupg --yes -q --detach-sign {} \;

@@ -8,7 +8,7 @@ resolve_device() {
             # Resolve the device
             dev=$(blkid -lt "$device" -o device)
             # Double check the device actually exists
-            if [[ -z "$dev" ]]; then
+            if [[ -e "$dev" ]]; then
                 echo "$dev"
                 return 0
             fi
@@ -16,7 +16,7 @@ resolve_device() {
         ;;
         /dev/*)
             # Check the device actually exists
-            if [[ -z "$device" ]]; then
+            if [[ -e "$device" ]]; then
                 echo "$device"
                 return 0
             fi
@@ -40,7 +40,8 @@ mkdir tpm_files
 # Verify that someting was mounted and exit if not.
 if ! mountpoint -q "tpm_files" 2>/dev/null; then
     echo "Could not mount tpm_files_part device. Temporary policy was NOT created."
-    exit 1 
+    rm -r tpm_files
+    exit 1
 fi
 
 # Parse cryptdevice and tpm2_encrypt optional arguments from kernel command line
@@ -78,6 +79,8 @@ EOF
         policy_authorization_key_handle="$base_file_path/policy-authorization-key.handle"
     else
         echo "tpm_policy_auth handle file name not found and default not available. Temporary policy was NOT created."
+        umount tpm_files
+        rm -r tpm_files
         exit 1
     fi
 # Otherwise check for defaults
@@ -85,6 +88,8 @@ elif [[ -f "$base_file_path/policy-authorization-key.handle" ]]; then
     policy_authorization_key_handle="$base_file_path/policy-authorization-key.handle"
 else
     echo "tpm_policy_auth not specified and defaults not available. Temporary policy was NOT created."
+    umount tpm_files
+    rm -r tpm_files
     exit 1
 fi
 
@@ -121,7 +126,7 @@ tpm2_flushcontext temporary-authorized-policy.session
 rm temporary-authorized-policy.session
 
 # sign the policy with the policy authorization key
-tpm2_sign -Q --key-context $policy_authorization_key_handle --auth "hex:0x$(cat tpm_files/policy-authorization-accessaa /root/bootkeys/policy-authorization-accessab)" --hash-algorithm sha256 --scheme rsapss --signature $base_file_path/temporary-authorized-policy.signature $base_file_path/temporary-authorized-policy.policy
+tpm2_sign -Q --key-context $policy_authorization_key_handle --auth "hex:$(cat $base_file_path/policy-authorization-accessaa /root/bootkeys/policy-authorization-accessab)" --hash-algorithm sha256 --scheme rsapss --signature $base_file_path/temporary-authorized-policy.signature $base_file_path/temporary-authorized-policy.policy
 
 # -- Cleanup -- #
 

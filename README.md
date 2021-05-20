@@ -650,8 +650,8 @@ tpm2_create --parent-context primary-key.context --parent-auth file:primary-key-
 
 - `--parent-context primary-key.context` encrypts the key under the primary key created previously.  
 - `--parent-auth file:primary-key-authorization.bin` provides the primary key authorization value so that we can use it to encrypt the new key.
-- `--key-auth hex:0x$(cat policy-authorization-accessaa policy-authorization-accessab)` sets the authorization value for the new key.
-  - Since this value is now in hexadecimal, and split into two files, we need to concatenate the two files with a shell substitution and pass the result as a hex value by prefixing `hex:0x` to it. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/authorizations.md) for details on passing auth values as hexadecimal.  
+- `--key-auth hex:$(cat policy-authorization-accessaa policy-authorization-accessab)` sets the authorization value for the new key.
+  - Since this value is now in hexadecimal, and split into two files, we need to concatenate the two files with a shell substitution and pass the result as a hex value by prefixing `hex:` to it. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/authorizations.md) for details on passing auth values as hexadecimal.  
   *(Yes you could just use the original file right now, but this shows you how it will be done later)*  
 - `--key-algorithm rsa2048:rsapss-sha256:null` sets the key algorithm.
   - This argument specifically sets it to be an `rsa2048` key with a signing scheme of `rsapss` (RSASSA-PSS) using `sha256` as the hash algorithm, as well as a null symmetric algorithm since this key can't be used for encryption anyway. See [this manpage](https://github.com/tpm2-software/tpm2-tools/blob/master/man/common/alg.md).  
@@ -853,11 +853,11 @@ tpm2_flushcontext temporary-authorized-policy.session
 In order for the wildcard policy to accept this new policy, it must be signed by the key we created. To do this, we can use the `tpm2_sign` command:
 
 ```Shell
-tpm2_sign --key-context policy-authorization-key.handle --auth hex:0x$(cat policy-authorization-accessaa policy-authorization-accessab) --hash-algorithm sha256 --scheme rsapss --signature temporary-authorized-policy.signature temporary-authorized-policy.policy
+tpm2_sign --key-context policy-authorization-key.handle --auth hex:$(cat policy-authorization-accessaa policy-authorization-accessab) --hash-algorithm sha256 --scheme rsapss --signature temporary-authorized-policy.signature temporary-authorized-policy.policy
 ```
 
 - `--key-context policy-authorization-key.handle` specifies the key that we want to sign with.
-- `--auth hex:0x$(cat policy-authorization-accessaa policy-authorization-accessab)` specifies the authorization value needed to access the key, just as we did when we created it.
+- `--auth hex:$(cat policy-authorization-accessaa policy-authorization-accessab)` specifies the authorization value needed to access the key, just as we did when we created it.
 - `--hash-algorithm sha256` specifies the hash algorithm to be used for the message digest.
 - `--scheme rsapss` specifies the signing scheme to use.
   - This tool is supposed to be able to auto-detect this from the key you are using but there appears to be a bug with that at the time of writing, so just specify it.

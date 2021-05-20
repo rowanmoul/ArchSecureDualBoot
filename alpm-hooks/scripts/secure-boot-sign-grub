@@ -3,8 +3,16 @@
 # Copy the grub image to be signed to the present working directory.
 cp /efi/EFI/GRUB/grubx64.efi grubx64.efi
 
-# sign the image and overwrite the original with the signed copy.
-echo -n "grubx64.efi - " && gpg --homedir /root/bootkeys/.gnupg -d /root/bootkeys/db.key | sbsign --key - --cert /root/bootkeys/db.crt --output /efi/EFI/GRUB/grubx64.efi grubx64.efi
+# Decrypt the db key to a file
+# Unfortunately sbsign cannot accept key input from sdtin
+# Since this is inside the encrypted drive the key isn't directly exposed on the disk in the clear
+gpg --homedir /root/bootkeys/.gnupg --output dbdecrypt.key -q --decrypt /root/bootkeys/db.key
+
+# Sign the image and overwrite the original with the signed copy.
+echo -n "grubx64.efi - " && sbsign --key dbdecrypt.key --cert /root/bootkeys/db.crt --output /efi/EFI/GRUB/grubx64.efi grubx64.efi
+
+# Delete decrypted key
+rm dbdecrypt.key
 
 # Make sure the new signed image is larger than the copy of the original.
 # Since the signing process adds the signature to the file itself, the new image should be slightly larger.

@@ -1267,13 +1267,15 @@ If you skipped over the Secure Boot section, we generated a new PGP key there:
 [Generate a PGP key](#generate-a-pgp-key)
 
 Now that we have a PGP key, we need to tell grub to only load files that have been signed by it. To do this, we embed the public part of the key into the grub binary. Before this can happen, we have to export the public portion to a file.
+*DO NOT* use the `-a` or `--armor` option here as GRUB cannot load ascii armored public keys. It must remain in binary format!
 
 ```Shell
-gpg --homedir /root/bootkeys/.gnupg --output /root/bootkeys/secure-grub.pgp --armor --export <yourChosenUser@exampleDomain.com>
+gpg --homedir /root/bootkeys/.gnupg --output /root/bootkeys/secure-grub.pgp --export <yourChosenUser@exampleDomain.com>
 ```
 
-- `--armor` adds ASCII armor to the exported key file (makes it shell safe by converting the binary file to ASCII text).
+- `--homedir /root/bootkeys/.gnupg` our non-standard home directory.
 - `--export <yourChosenUser@exampleDomain.com>` specifies which key should be exported based on the email address entered when the key was generated.
+- `--output /root/bootkeys/secure-grub.pgp` specifies where to write the exported public key file.
 
 This is just a public key, but still might as well restrict access to it.
 
@@ -1283,14 +1285,14 @@ chmod 400 /root/bootkeys/secure-grub.pgp
 
 ### Configure grub to use the key
 
-To embed the key in the grub binary, we can add the `--pubkey` flag to grub-install. We will be automating this in the next section, but here is how you would do it manually, using the same settings we used earlier when installing Linux.
+To embed the key in the grub binary, we can add the `--pubkey` flag to grub-install. We will be automating this in the next section, but here is how you would do it manually, using the same settings we used earlier when installing Linux. Note that we have added some additional crypto related modules that grub needs to successfully verify signatures. Without these it will just complain that "sha256" has not be loaded (or similar).
 
 ```Shell
-grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB --modules=tpm --pubkey /root/bootkeys/secure-grub.pgp
+grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB --modules="tpm gcry_sha256 gcry_sha512 gcry_rsa" --pubkey /root/bootkeys/secure-grub.pgp
 ```
 
 **Warning!**  
-Embedding the key will automatically turn on grub's `check_signatures` rule, and you will not be able to boot unless all files grub loads are signed (or you drop into the grub shell and disable the rule). It is recommended that you don't shutdown and reboot without having completed the next two sections at least.
+Embedding the key will automatically turn on grub's `check_signatures` rule, and you will not be able to boot unless all files grub loads (including the configuration file!) are signed. It is recommended that you don't shutdown and reboot after doing this until you have having completed the next two sections and signed grub's files.
 
 ### Configure grub with a passphrase
 

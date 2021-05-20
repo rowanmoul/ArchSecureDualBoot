@@ -1,5 +1,14 @@
 #!/bin/bash -e
 
+trap 'on_exit $?' EXIT
+
+on_exit() {
+    # Check for an error
+    if [ "$1" != "0" ]; then
+        echo "An unexpected error occurred. Temporary policy was probably NOT created."
+    fi
+}
+
 # Used to resolve a block device from persistent block device name, or /dev/* path
 resolve_device() {
     local dev device=$1
@@ -26,29 +35,38 @@ resolve_device() {
     return 1
 }
 
+proc_cmdline=$(cat /proc/cmdline)
+grub_config_cmdline=$(sed -En "s/GRUB_CMDLINE_LINUX_DEFAULT=\"(.*)\"/\1/p" < /etc/default/grub)
+
 # -- Mount partition with tpm files, identify correct folder, and correct file names -- #
 
 # Parse tpm_files_part from the kernel command line
-tpm_files_part=$(xargs -n1 -a /proc/cmdline | sed -En "s/tpm_files_part=(.*)/\1/p")
+# or use the command line from the grub config file if needed (eg. if running this in a chroot from a live disk)
+if [[ $proc_cmdline =~ "tpm_files_part=" ]]; then
+    cmdline=$proc_cmdline
+else
+    cmdline=$grub_config_cmdline
+fi
+tpm_files_part=$(echo "$cmdline" | xargs -n1 | sed -En "s/tpm_files_part=(.*)/\1/p")
 
 # Make directory to use as mount point
-mkdir tpm_files
+mkdir -p  tpm_files
 
 # Resolve the device and mount it if possible
 [[ -n "$tpm_files_part" ]] && resolved_files_part="$(resolve_device "$tpm_files_part")" && mount "$resolved_files_part" tpm_files;
 
 # Verify that someting was mounted and exit if not.
 if ! mountpoint -q "tpm_files" 2>/dev/null; then
-    echo "Could not mount tpm_files_part device. Temporary policy was NOT created."
+    echo "Could not mount tpm_files_part device."
     rm -r tpm_files
     exit 1
 fi
 
-# Parse cryptdevice and tpm2_encrypt optional arguments from kernel command line
-cryptdevice=$(xargs -n1 -a /proc/cmdline | sed -En "s/cryptdevice=([^:]*):.*/\1/p")
-tpm_files_dir=$(xargs -n1 -a /proc/cmdline | sed -En "s/tpm_files_dir=(.*)/\1/p")
-tpm_policy_auth=$(xargs -n1 -a /proc/cmdline | sed -En "s/tpm_policy_auth=(.*:.*)/\1/p")
-tpm_pcr_bank=$(xargs -n1 -a /proc/cmdline | sed -En "s/tpm_pcr_bank=(.*)/\1/p")
+# Parse cryptdevice and tpm2_encrypt optional arguments from kernel command line (proc or grub as chosen above)
+cryptdevice=$(echo "$cmdline" | xargs -n1 | sed -En "s/cryptdevice=([^:]*):.*/\1/p")
+tpm_files_dir=$(echo "$cmdline" | xargs -n1 | sed -En "s/tpm_files_dir=(.*)/\1/p")
+tpm_policy_auth=$(echo "$cmdline" | xargs -n1 | sed -En "s/tpm_policy_auth=(.*:.*)/\1/p")
+tpm_pcr_bank=$(echo "$cmdline" | xargs -n1 | sed -En "s/tpm_pcr_bank=(.*)/\1/p")
 
 # Check for tpm_file_dir and validate input
 if [[ -n "$tpm_files_dir" ]] && [[ -d "tpm_files$tpm_files_dir" ]]; then
@@ -78,7 +96,7 @@ EOF
     elif [[ -f "$base_file_path/policy-authorization-key.handle" ]]; then
         policy_authorization_key_handle="$base_file_path/policy-authorization-key.handle"
     else
-        echo "tpm_policy_auth handle file name not found and default not available. Temporary policy was NOT created."
+        echo "tpm_policy_auth handle file name not found and default not available."
         umount tpm_files
         rm -r tpm_files
         exit 1
@@ -87,7 +105,7 @@ EOF
 elif [[ -f "$base_file_path/policy-authorization-key.handle" ]]; then
     policy_authorization_key_handle="$base_file_path/policy-authorization-key.handle"
 else
-    echo "tpm_policy_auth not specified and defaults not available. Temporary policy was NOT created."
+    echo "tpm_policy_auth not specified and defaults not available."
     umount tpm_files
     rm -r tpm_files
     exit 1

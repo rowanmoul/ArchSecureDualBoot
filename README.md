@@ -1,5 +1,7 @@
 <!-- omit in toc -->
-# Secure Booting Arch Linux Alongside Windows 10 with Encrpyted Disks
+# Secure Booting Arch Linux Alongside Windows 10 with Encrypted Disks
+
+*Even if you don't want to dual boot windows, 95% of this guide still applies. It could even be more secure since you don't need the Microsoft secure boot keys.*
 
 This guide started as my personal documentation of this process for my own reference, and grew to become the monstrosity you see below. I am **not** a security expert. I am a software developer with experience primarily in web development and this guide is the culmination of my own research into this topic and is by no means meant to impart any sort of sound security advice. It is up to you to determine if the setup described here is suitably secure for your needs. The [safeboot project has an excellent page](https://safeboot.dev/threats/) that describes all the types of attacks that they protect against and how they prevent them. You may well find their work to be more suitable to your needs. It is indisputably more secure, but at the cost of some convenience.
 

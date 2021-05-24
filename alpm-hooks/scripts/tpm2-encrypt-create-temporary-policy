@@ -5,6 +5,8 @@ trap 'on_exit $?' EXIT
 on_exit() {
     # Check for an error
     if [ "$1" != "0" ]; then
+        umount tpm_files 2>/dev/null
+        rm -r tpm_files 2>/dev/null
         echo "An unexpected error occurred. Temporary policy was probably NOT created."
     fi
 }

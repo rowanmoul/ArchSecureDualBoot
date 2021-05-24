@@ -8,5 +8,5 @@ Target = usr/lib/initcpio/*
 [Action]
 Description = Signing kernel and initramfs for GRUB...
 When = PostTransaction
-Exec = /usr/bin/bash -c "find /boot -type f \( -name 'vmlinuz*' -or -name 'initramfs*' \) -not -name '*.sig' -exec gpg --homedir /root/bootkeys/.gnupg --yes -q --detach-sign {} \;"
+Exec = /usr/bin/bash -c "find /boot -type f \( -name 'vmlinuz*' -or -name 'initramfs*' \) -not -name '*.sig' -exec gpg --homedir /root/bootkeys/gnupg --yes -q --detach-sign {} \;"
 Depends = gnupg

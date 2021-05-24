@@ -1,12 +1,23 @@
 #!/bin/bash -e
 
+trap 'on_exit $?' EXIT
+
+on_exit() {
+    # Check for an error
+    if [ "$1" != "0" ]; then
+        rm grubx64.efi 2>/dev/null
+        rm dbdecrypt.key 2>/dev/null
+        echo "An unexpected error occurred. GRUB may not have been signed for secure boot."
+    fi
+}
+
 # Copy the grub image to be signed to the present working directory.
 cp /efi/EFI/GRUB/grubx64.efi grubx64.efi
 
 # Decrypt the db key to a file
 # Unfortunately sbsign cannot accept key input from sdtin
 # Since this is inside the encrypted drive the key isn't directly exposed on the disk in the clear
-gpg --homedir /root/bootkeys/.gnupg --output dbdecrypt.key -q --decrypt /root/bootkeys/db.key
+gpg --homedir /root/bootkeys/gnupg --output dbdecrypt.key -q --decrypt /root/bootkeys/db.key
 
 # Sign the image and overwrite the original with the signed copy.
 echo -n "grubx64.efi - " && sbsign --key dbdecrypt.key --cert /root/bootkeys/db.crt --output /efi/EFI/GRUB/grubx64.efi grubx64.efi

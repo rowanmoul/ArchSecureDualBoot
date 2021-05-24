@@ -3,11 +3,11 @@
 echo "Installing grub in /boot..."
 grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB --modules="tpm gcry_sha256 gcry_sha512 gcry_rsa" --pubkey /root/bootkeys/secure-grub.pgp
 
-echo "Patching /etc/grub.d/10_linux..."
+# Patch /etc/grub.d/10_linux
 patch /etc/grub.d/10_linux /etc/pacman.d/scripts/grub_10_linux_mod.patch
 
-echo "Generating new grub config..."
+# Generate new grub config
 grub-mkconfig -o /boot/grub/grub.cfg
 
-echo "Signing grub files..."
-find /boot -type f -path "/boot/grub/*" -not -name "*.sig" -exec gpg --homedir /root/bootkeys/.gnupg --yes -q --detach-sign {} \;
+echo "Signing all grub files... (this could take a while)"
+find /boot -type f -path "/boot/grub/*" -not -name "*.sig" -exec gpg --homedir /root/bootkeys/gnupg --yes -q --detach-sign {} \;

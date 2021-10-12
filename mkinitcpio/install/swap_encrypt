@@ -28,9 +28,12 @@ build() {
 
 help() {
     cat <<HELPEOF
-This hook allows for an encrypted SWAP device. It is an exact clone of the
+This hook allows for an encrypted SWAP device. It is a near exact clone of the
 'encrypt' hook created by the Arch Linux Maintainers. This hook expects the
 same kernel arguments except with 'swap_' prepended to the names.
+This hook should go BEFORE the encrypt hook, but AFTER tpm2_encrypt.
+If used with tpm2_encrypt, make your life easier and use the same tpm sealed
+passphrase for both swap and root.
 
 Users should specify the device to be unlocked
 using 'swap_cryptdevice=device:dmname' on the kernel command line,

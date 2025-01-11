@@ -6,8 +6,11 @@
 This guide started as my personal documentation of this process for my own reference, and grew to become the monstrosity you see below. I am **not** a security expert. I am a software developer with experience primarily in web development and this guide is the culmination of my own research into this topic and is by no means meant to impart any sort of sound security advice. It is up to you to determine if the setup described here is suitably secure for your needs. The [safeboot project has an excellent page](https://safeboot.dev/threats/) that describes all the types of attacks that they protect against and how they prevent them. You may well find their work to be more suitable to your needs. It is indisputably more secure, but at the cost of some convenience.
 
 If something included in this guide is totally wrong, bad practice, or fundamentally insecure please open an issue, submit a pull request, or otherwise contact me. I welcome the feedback!
+Many many many hours of repetitive manual testing went into creating the scripts in this repo, but I know there are still bugs. Consider this to be somewhere between alpha and beta software and note the complete lack of warranty as stated in the licence file.
 
-I am daily driving this setup on all of my machines and will continue to fix issues as I encounter them. Many many many hours of repetitive manual testing went into creating the scripts in this repo, but I know there are still bugs. Consider this to be somewhere between alpha and beta software and note the complete lack of warranty as stated in the licence file.
+## Update January 2025  
+I was daily driving this setup on all of my machines at one point, but currently don't have any devices running like this.  
+**I may revisit this again in the future, but for now consider this repo a historical archive.** I suspect most of the information in the readme is still relevant.
 
 <!-- omit in toc -->
 # Table of Contents
